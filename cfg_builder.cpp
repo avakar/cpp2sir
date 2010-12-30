@@ -898,7 +898,7 @@ struct context
 			eop false_res = this->build_expr(false_head, e->getFalseExpr());
 			if (true_res.type != eot_none && false_res.type != eot_none)
 			{
-				return this->make_phi(head, false_head, true_res, false_res, e->isLvalue(m_fn->getASTContext()) == clang::Expr::LV_Valid, e);
+				return this->make_phi(head, false_head, true_res, false_res, e->isLValue() == clang::Expr::LV_Valid, e);
 			}
 			else
 			{
