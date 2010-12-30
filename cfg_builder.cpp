@@ -949,7 +949,7 @@ struct context
 			this->build_construct_expr(head, this->make_address(temp), e);
 			return temp;
 		}
-		else if (clang::CXXExprWithTemporaries const * e = llvm::dyn_cast<clang::CXXExprWithTemporaries>(expr))
+		else if (clang::ExprWithCleanups const * e = llvm::dyn_cast<clang::ExprWithCleanups>(expr))
 		{
 			return this->build_expr(head, e->getSubExpr());
 		}
@@ -1124,7 +1124,7 @@ struct context
 		BOOST_ASSERT(e != 0);
 		BOOST_ASSERT(!m_fullexpr_lifetimes.empty());
 
-		if (clang::CXXExprWithTemporaries const * te = llvm::dyn_cast<clang::CXXExprWithTemporaries>(e))
+		if (clang::ExprWithCleanups const * te = llvm::dyn_cast<clang::ExprWithCleanups>(e))
 		{
 			this->init_object(head, varptr, vartype, te->getSubExpr(), blockLifetime);
 			return;
