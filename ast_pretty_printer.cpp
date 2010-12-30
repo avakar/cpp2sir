@@ -64,9 +64,10 @@ void pretty_print_decl(clang::Decl const * decl, std::ostream & out, int level)
 				{
 					indent(out, level + 1);
 					out << "init member:\n";
-					pretty_print_decl(init->getMember(), out, level + 2);
-					if (init->getMember()->isAnonymousStructOrUnion())
-						pretty_print_decl(init->getAnonUnionMember(), out, level + 2);
+					if (init->isMemberInitializer())
+						pretty_print_decl(init->getMember(), out, level + 2);
+					if (init->isIndirectMemberInitializer())
+						pretty_print_decl(init->getIndirectMember()->getVarDecl(), out, level + 2);
 				}
 				else
 				{
