@@ -88,7 +88,7 @@ public:
 
 	void HandleTranslationUnit(clang::ASTContext &ctx)
 	{
-		if (m_ci.getDiagnostics().getNumErrors() > 0)
+		if (m_ci.getDiagnostics().hasErrorOccurred())
 		{
 			std::cerr << "Errors were found, serialization of AST and CFGs is disabled." << std::endl;
 			return;
@@ -232,14 +232,14 @@ int main(int argc, char * argv[])
 		}
 
 		clang::CompilerInstance comp_inst;
-		clang::TextDiagnosticBuffer * argDiagBuffer = new clang::TextDiagnosticBuffer();
-		clang::Diagnostic * argDiag = new clang::Diagnostic(argDiagBuffer);
+
+		llvm::IntrusiveRefCntPtr<clang::DiagnosticIDs> diagIds;
+		clang::Diagnostic argDiag(diagIds);
 
 		clang::CompilerInvocation & ci = comp_inst.getInvocation();
-		clang::CompilerInvocation::CreateFromArgs(ci, &args.front(), &args.back() + 1, *argDiag);
+		clang::CompilerInvocation::CreateFromArgs(ci, &args.front(), &args.back() + 1, argDiag);
 
 		comp_inst.createDiagnostics(args.size(), (char **)&args[0]);
-		argDiagBuffer->FlushDiagnostics(comp_inst.getDiagnostics());
 
 		if (!c.printJsonCfg && !c.printReadableAST && !c.debugCFG && !c.printUnitAST && !c.buildCfg)
 			c.printReadableAST = true;
@@ -247,7 +247,7 @@ int main(int argc, char * argv[])
 		MyASTDumpAction act(c);
 		comp_inst.ExecuteAction(act);
 
-		return comp_inst.getDiagnostics().getNumErrors();
+		return comp_inst.getDiagnostics().hasErrorOccurred();
 	}
 	catch (std::exception const & e)
 	{
