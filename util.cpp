@@ -2,73 +2,55 @@
 #include <clang/AST/DeclCXX.h>
 #include <clang/AST/DeclTemplate.h>
 #include <boost/assert.hpp>
+#include <boost/lexical_cast.hpp>
+
+#include "mangle.h"
 
 namespace {
 
-std::string make_declctx_name(clang::DeclContext const * declctx, std::string const & static_prefix)
+clang::LinkageSpecDecl::LanguageIDs get_linkage_specifier(clang::NamedDecl const * decl)
 {
-	BOOST_ASSERT(declctx);
+	clang::DeclContext const * ctx = llvm::dyn_cast<clang::DeclContext>(decl);
+	if (!ctx)
+		return clang::LinkageSpecDecl::lang_cxx;
 
-	if (clang::LinkageSpecDecl const * lsdecl = llvm::dyn_cast<clang::LinkageSpecDecl>(declctx))
+	ctx = ctx->getParent();
+	while (ctx)
 	{
-		if (lsdecl->getLanguage() == clang::LinkageSpecDecl::lang_c)
-			return "__externc::";
+		if (clang::LinkageSpecDecl const * lsdecl = llvm::dyn_cast<clang::LinkageSpecDecl>(ctx))
+			return lsdecl->getLanguage();
 
-		if (lsdecl->getLanguage() == clang::LinkageSpecDecl::lang_cxx)
-			return make_declctx_name(lsdecl->getDeclContext(), static_prefix);
-
-		return "__externlang::";
+		ctx = ctx->getParent();
 	}
 
-	clang::NamedDecl const * decl = llvm::dyn_cast<clang::NamedDecl>(declctx);
-	return decl? make_decl_name(decl, static_prefix) + "::": "";
+	return clang::LinkageSpecDecl::lang_cxx;
 }
 
 }
 
 std::string make_decl_name(clang::NamedDecl const * decl, std::string const & static_prefix)
 {
-	BOOST_ASSERT(decl);
-	if (clang::VarDecl const * vardecl = llvm::dyn_cast<clang::VarDecl>(decl))
-	{
-		if (vardecl->getLinkage() == clang::InternalLinkage)
-			return make_declctx_name(vardecl->getDeclContext(), static_prefix) + static_prefix + "::static::" + vardecl->getNameAsString();
+	std::string name;
 
-		if (vardecl->isStaticLocal())
-			return make_declctx_name(vardecl->getDeclContext(), static_prefix) + vardecl->getNameAsString();
-	}
-	else if (clang::FunctionDecl const * fndecl = llvm::dyn_cast<clang::FunctionDecl>(decl))
+	if (decl->getLinkage() == clang::UniqueExternalLinkage || decl->getLinkage() == clang::InternalLinkage)
 	{
-		std::string name;
-		if (fndecl->getLinkage() == clang::InternalLinkage)
-			name = make_declctx_name(fndecl->getDeclContext(), static_prefix) + static_prefix + "::static::" + fndecl->getNameAsString();
-		else
-			name = make_declctx_name(fndecl->getDeclContext(), static_prefix) + fndecl->getNameAsString();
-
-		name += '(';
-		for (clang::FunctionDecl::param_const_iterator param_ci = fndecl->param_begin(); param_ci != fndecl->param_end(); ++param_ci)
-		{
-			if (param_ci != fndecl->param_begin())
-				name += ", ";
-			clang::VarDecl const * param_decl = *param_ci;
-			name += static_cast<clang::QualType>(param_decl->getType()->getCanonicalTypeUnqualified()).getAsString();
-		}
-		name += ')';
-
-		if (clang::CXXMethodDecl const * cxxfndecl = llvm::dyn_cast<clang::CXXMethodDecl>(fndecl))
-		{
-			if (cxxfndecl->getTypeQualifiers() & clang::Qualifiers::Const)
-				name += " const";
-			if (cxxfndecl->getTypeQualifiers() & clang::Qualifiers::Volatile)
-				name += " volatile";
-		}
-		return name;
-	}
-	else if (clang::NamespaceDecl const * nsdecl = llvm::dyn_cast<clang::NamespaceDecl>(decl))
-	{
-		if (nsdecl->isAnonymousNamespace())
-			return make_declctx_name(nsdecl->getDeclContext(), static_prefix) + static_prefix;
+		name = "_S";
+		name.append(boost::lexical_cast<std::string>(static_prefix.size()));
+		name.append(static_prefix);
 	}
 
-	return make_declctx_name(decl->getDeclContext(), static_prefix) + decl->getNameAsString();
+	if (get_linkage_specifier(decl) == clang::LinkageSpecDecl::lang_c || (!llvm::isa<clang::VarDecl>(decl) && !llvm::isa<clang::FunctionDecl>(decl)))
+		return name + decl->getNameAsString();
+
+	clang::CodeGen::MangleContext ctx(decl->getASTContext());
+
+	llvm::SmallVector<char, 64> res;
+	if (clang::CXXConstructorDecl const * ctor = llvm::dyn_cast<clang::CXXConstructorDecl>(decl))
+		ctx.mangleCXXCtor(ctor, clang::Ctor_Complete, res);
+	else if (clang::CXXDestructorDecl const * dtor = llvm::dyn_cast<clang::CXXDestructorDecl>(decl))
+		ctx.mangleCXXDtor(dtor, clang::Dtor_Complete, res);
+	else
+		ctx.mangleName(decl, res);
+
+	return name + std::string(res.begin(), res.end());
 }
