@@ -10,20 +10,16 @@ link_directories(${LLVM_LIB_DIR})
 set(CLANG_LIBS
     LLVMCore
     LLVMSupport
-    LLVMObject
     LLVMMC
 
     clangAST
     clangAnalysis
     clangBasic
-    clangCodeGen
     clangDriver
     clangFrontend
-    clangFrontendTool
     clangIndex
     clangLex
     clangParse
-    clangRewrite
     clangSema
     clangSerialization
     )
