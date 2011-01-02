@@ -5,6 +5,37 @@
 
 namespace {
 
+struct convert_constant
+	: boost::static_visitor<Json::Value>
+{
+	Json::Value operator()(sir_int_t const & v) const
+	{
+		return Json::Value((int)v);
+	}
+
+	Json::Value operator()(std::string const & v) const
+	{
+		return Json::Value(v);
+	}
+
+	Json::Value operator()(sir_array const & v) const
+	{
+		Json::Value value = Json::Value(Json::arrayValue);
+		value.resize(v.values.size());
+		for (std::size_t i = 0; i < v.values.size(); ++i)
+			value[i] = v.values[i].apply_visitor(*this);
+		return value;
+	}
+
+	Json::Value operator()(sir_dict const & v) const
+	{
+		Json::Value value = Json::Value(Json::objectValue);
+		for (std::map<std::string, constant>::const_iterator ci = v.values.begin(); ci != v.values.end(); ++ci)
+			value[ci->first] = ci->second.apply_visitor(*this);
+		return value;
+	}
+};
+
 class context
 {
 public:
@@ -70,7 +101,7 @@ private:
 					Json::Value json_succ(Json::arrayValue);
 					json_succ.append((Json::UInt)index_map[target(*edge_it, c)]);
 					json_succ.append((Json::UInt)c[*edge_it].id);
-					json_succ.append(c[*edge_it].cond);
+					json_succ.append(c[*edge_it].cond.apply_visitor(convert_constant()));
 					json_node[1].append(json_succ);
 				}
 
@@ -114,7 +145,7 @@ private:
 						json_op.append(Json::nullValue);
 						break;
 					case 1:
-						json_op.append(boost::get<std::string>(node.ops[i].id));
+						json_op.append(boost::get<constant>(node.ops[i].id).apply_visitor(convert_constant()));
 						break;
 					case 2:
 						json_op.append((Json::UInt)index_map[boost::get<cfg::vertex_descriptor>(node.ops[i].id)]);
@@ -190,6 +221,12 @@ private:
 			entry.append(it->second);
 		}
 		json_prog["_vfn_map"] = json_vfn_map;
+
+		Json::Value json_globals(Json::objectValue);
+		std::map<std::string, constant> const & globals = prog.globals();
+		for (std::map<std::string, constant>::const_iterator it = globals.begin(); it != globals.end(); ++it)
+			json_globals[it->first] = it->second.apply_visitor(convert_constant());
+		json_prog["globals"] = json_globals;
 
 		return json_prog;
 	}

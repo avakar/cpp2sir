@@ -19,9 +19,9 @@
 namespace {
 
 // FIXME: Assumes that sizeof(wchar_t) == 2
-std::vector<boost::int64_t> string_literal_to_value_array(clang::StringLiteral const * sl)
+std::vector<sir_int_t> string_literal_to_value_array(clang::StringLiteral const * sl)
 {
-	std::vector<boost::int64_t> res;
+	std::vector<sir_int_t> res;
 
 	llvm::StringRef str = sl->getString();
 	if (sl->isWide())
@@ -41,25 +41,26 @@ std::vector<boost::int64_t> string_literal_to_value_array(clang::StringLiteral c
 
 struct context
 {
-	context(cfg & c, clang::FunctionDecl const * fn, clang::SourceManager const & sm,
+	context(program & p, cfg & c, clang::FunctionDecl const * fn, clang::SourceManager const & sm,
 		filename_store & fnames, detail::build_cfg_visitor_base & visitor, std::string const & static_prefix)
-		: m_static_prefix(static_prefix), m_sm(sm), m_fnames(fnames), m_visitor(visitor), g(c), m_fn(fn),
+		: m_program(p), m_static_prefix(static_prefix), m_sm(sm), m_fnames(fnames), m_visitor(visitor), g(c), m_fn(fn),
 		m_head(add_vertex(g)), m_exc_exit_node(add_vertex(g)), m_term_exit_node(add_vertex(g))
 	{
 		g.entry(m_head);
 
 		g[m_exc_exit_node].type = cfg::nt_exit;
-		g[m_exc_exit_node].ops.push_back(cfg::operand(cfg::ot_const, "1"));
+		g[m_exc_exit_node].ops.push_back(cfg::operand(cfg::ot_const, sir_int_t(1)));
 
 		auto_var_registration reg = { 0, eop(), m_exc_exit_node };
 		m_auto_objects.push_back(reg);
 
 		g[m_term_exit_node].type = cfg::nt_exit;
-		g[m_term_exit_node].ops.push_back(cfg::operand(cfg::ot_const, "2"));
+		g[m_term_exit_node].ops.push_back(cfg::operand(cfg::ot_const, sir_int_t(2)));
 
 		this->build();
 	}
 
+	program & m_program;
 	std::string m_static_prefix;
 	clang::SourceManager const & m_sm;
 	filename_store & m_fnames;
@@ -445,7 +446,7 @@ struct context
 		return new_head;
 	}
 
-	void set_cond(cfg::vertex_descriptor node, std::size_t index, std::string cond)
+	void set_cond(cfg::vertex_descriptor node, std::size_t index, constant const & cond)
 	{
 		BOOST_ASSERT(in_degree(node, g) == 1);
 		cfg::edge_descriptor edge = *in_edges(node, g).first;
@@ -612,9 +613,9 @@ struct context
 				cfg::vertex_descriptor cont_head = this->duplicate_vertex(head);
 
 				if (e->getOpcode() == clang::BO_LAnd)
-					g[*in_edges(head, g).first].cond = "0";
+					g[*in_edges(head, g).first].cond = sir_int_t(0);
 				else
-					g[*in_edges(cont_head, g).first].cond = "0";
+					g[*in_edges(cont_head, g).first].cond = sir_int_t(0);
 
 				eop const & rhs = this->build_expr(cont_head, e->getRHS());
 				cfg::vertex_descriptor rhs_value_node = this->make_node(cont_head, rhs);
@@ -648,7 +649,7 @@ struct context
 				cfg::vertex_descriptor node = this->add_node(head, enode(cfg::nt_call, e)
 					(eot_oper, e->getOpcode() == clang::UO_PreInc? "+": "-")
 					(expr)
-					(eot_const, "1"));
+					(eot_const, sir_int_t(1)));
 				this->add_node(head, enode(cfg::nt_call, e)
 					(eot_oper, "=")
 					(this->make_address(expr))
@@ -661,7 +662,7 @@ struct context
 				cfg::vertex_descriptor node = this->add_node(head, enode(cfg::nt_call, e)
 					(eot_oper, e->getOpcode() == clang::UO_PostInc? "+": "-")
 					(expr)
-					(eot_const, "1"));
+					(eot_const, sir_int_t(1)));
 				this->add_node(head, enode(cfg::nt_call, e)
 					(eot_oper, "=")
 					(this->make_address(expr))
@@ -681,32 +682,25 @@ struct context
 		}
 		else if (clang::CXXBoolLiteralExpr const * e = llvm::dyn_cast<clang::CXXBoolLiteralExpr>(expr))
 		{
-			return eop(eot_const, e->getValue()? "1": "0");
+			return eop(eot_const, e->getValue()? sir_int_t(1): sir_int_t(0));
 		}
 		else if (clang::IntegerLiteral const * e = llvm::dyn_cast<clang::IntegerLiteral>(expr))
 		{
-			return eop(eot_const, e->getValue().toString(10, true));
+			return eop(eot_const, (sir_int_t)e->getValue().getLimitedValue());
 		}
 		else if (clang::FloatingLiteral const * e = llvm::dyn_cast<clang::FloatingLiteral>(expr))
 		{
-			return eop(eot_const, boost::lexical_cast<std::string>(e->getValueAsApproximateDouble()));
+			return eop(eot_const, e->getValueAsApproximateDouble());
 		}
 		else if (clang::CharacterLiteral const * e = llvm::dyn_cast<clang::CharacterLiteral>(expr))
 		{
-			return eop(eot_const, boost::lexical_cast<std::string>(e->getValue()));
+			return eop(eot_const, sir_int_t(e->getValue()));
 		}
 		else if (clang::StringLiteral const * e = llvm::dyn_cast<clang::StringLiteral>(expr))
 		{
-			std::vector<boost::int64_t> values = string_literal_to_value_array(e);
-			std::string res = "[";
-			for (std::size_t i = 0; i < values.size(); ++i)
-			{
-				res.append(boost::lexical_cast<std::string>(values[i]));
-				if (i + 1 != values.size())
-					res.append(", ");
-			}
-			res += "]";
-			return eop(eot_const, res);
+			std::vector<sir_int_t> values = string_literal_to_value_array(e);
+			std::string lit_symbol = m_program.get_string_literal_symbol(values);
+			return eop(eot_var, lit_symbol);
 		}
 		else if (clang::DeclRefExpr const * e = llvm::dyn_cast<clang::DeclRefExpr>(expr))
 		{
@@ -714,7 +708,7 @@ struct context
 			if (clang::ValueDecl const * nd = llvm::dyn_cast<clang::ValueDecl>(decl))
 			{
 				if (clang::EnumConstantDecl const * ecd = llvm::dyn_cast<clang::EnumConstantDecl>(nd))
-					return eop(eot_const, ecd->getInitVal().toString(10));
+					return eop(eot_const, sir_int_t(ecd->getInitVal().getLimitedValue()));
 
 				if (clang::FunctionDecl const * fd = llvm::dyn_cast<clang::FunctionDecl>(nd))
 				{
@@ -892,7 +886,7 @@ struct context
 			eop cond_op = this->build_expr(head, e->getCond());
 			cfg::vertex_descriptor branch_node = this->make_node(head, cond_op);
 			cfg::vertex_descriptor false_head = this->duplicate_vertex(head);
-			g[*in_edges(false_head, g).first].cond = "0";
+			g[*in_edges(false_head, g).first].cond = sir_int_t(0);
 
 			eop true_res = this->build_expr(head, e->getTrueExpr());
 			eop false_res = this->build_expr(false_head, e->getFalseExpr());
@@ -915,6 +909,7 @@ struct context
 		else if (clang::SizeOfAlignOfExpr const * e = llvm::dyn_cast<clang::SizeOfAlignOfExpr>(expr))
 		{
 			// TODO: is there a better way?
+			// FIXME: use numbers
 			BOOST_ASSERT(e->isSizeOf());
 			if (e->isArgumentType())
 				return eop(eot_const, "sizeof:" + e->getArgumentType().getAsString());
@@ -987,9 +982,9 @@ struct context
 				if (e->getConstructor())
 					node(eot_func, this->get_name(e->getConstructor()));
 				else
-					node(eot_const, "0");
+					node(eot_const, sir_int_t(0));
 				node(eot_func, this->get_name(e->getOperatorDelete()));
-				node(eot_const, e->hasInitializer()? "1": "0");
+				node(eot_const, e->hasInitializer()? sir_int_t(1): sir_int_t(0));
 				this->append_args(
 					head,
 					node,
@@ -1061,7 +1056,7 @@ struct context
 
 	eop get_array_element(cfg::vertex_descriptor & head, eop const & decayedptr, eop const & index, clang::Stmt const * data)
 	{
-		if (index.type == eot_const && boost::get<std::string>(index.id) == "0")
+		if (index.type == eot_const && get_const<sir_int_t>(index.id) == 0)
 			return this->make_deref(head, decayedptr);
 
 		return eop(eot_nodetgt, this->add_node(head, enode(cfg::nt_call, data)
@@ -1097,7 +1092,7 @@ struct context
 		this->add_node(head, enode(cfg::nt_call, data)
 			(eot_oper, "=")
 			(varptr)
-			(eot_const, "0"));
+			(eot_const, sir_int_t(0)));
 	}
 
 	void value_initialize(cfg::vertex_descriptor & head, eop const & varptr, clang::QualType vartype, bool blockLifetime, clang::Stmt const * data = 0)
@@ -1111,7 +1106,7 @@ struct context
 
 			eop decayedptr = this->decay_array_to_pointer(head, this->make_deref(head, varptr));
 			for (llvm::APInt i(size.getBitWidth(), 0); i != size; ++i)
-				this->value_initialize(head, this->get_array_element(head, decayedptr, eop(eot_const, i.toString(10, false)), data), at->getElementType(), blockLifetime, data);
+				this->value_initialize(head, this->get_array_element(head, decayedptr, eop(eot_const, sir_int_t(i.getLimitedValue())), data), at->getElementType(), blockLifetime, data);
 		}
 		else
 		{
@@ -1194,22 +1189,22 @@ struct context
 				unsigned init_idx = 0;
 				for (; i != at->getSize() && init_idx != ile->getNumInits(); ++i, ++init_idx)
 				{
-					eop elem = this->get_array_element(head, decayedptr, eop(eot_const, i.toString(10, false)), e);
+					eop elem = this->get_array_element(head, decayedptr, eop(eot_const, sir_int_t(i.getLimitedValue())), e);
 					this->init_object(head, this->make_address(elem), at->getElementType(), ile->getInit(init_idx), blockLifetime);
 				}
 			}
 			else if (clang::StringLiteral const * sl = llvm::dyn_cast<clang::StringLiteral>(e))
 			{
-				std::vector<int64_t> values = string_literal_to_value_array(sl);
+				std::vector<sir_int_t> values = string_literal_to_value_array(sl);
 
 				std::size_t init_idx = 0;
 				for (; i != at->getSize() && init_idx < values.size(); ++i, ++init_idx)
 				{
-					eop elem = this->get_array_element(head, decayedptr, eop(eot_const, i.toString(10, false)), e);
+					eop elem = this->get_array_element(head, decayedptr, eop(eot_const, sir_int_t(i.getLimitedValue())), e);
 					this->add_node(head, enode(cfg::nt_call, e)
 						(eot_oper, "=")
 						(this->make_address(elem))
-						(eot_const, boost::lexical_cast<std::string>(values[init_idx])));
+						(eot_const, sir_int_t(values[init_idx])));
 				}
 			}
 			else if (clang::ArraySubscriptExpr const * ie = llvm::dyn_cast<clang::ArraySubscriptExpr>(e))
@@ -1233,14 +1228,14 @@ struct context
 				this->add_node(head, enode(cfg::nt_call, e)
 					(eot_oper, "=")
 					(this->make_address(loop_counter))
-					(eot_const, i.toString(10, false)));
+					(eot_const, sir_int_t(i.getLimitedValue())));
 				cfg::vertex_descriptor cond_node = this->add_node(head, enode(cfg::nt_call, e)
 					(eot_oper, "<")
 					(loop_counter)
-					(eot_const, at->getSize().toString(10, false)));
+					(eot_const, sir_int_t(at->getSize().getLimitedValue())));
 
 				cfg::vertex_descriptor false_head = this->duplicate_vertex(head);
-				this->set_cond(false_head, 0, "0");
+				this->set_cond(false_head, 0, sir_int_t(0));
 
 				eop elem = this->get_array_element(head, decayedptr, loop_counter, e);
 				this->value_initialize(head, this->make_address(elem), at->getElementType(), blockLifetime, e);
@@ -1248,7 +1243,7 @@ struct context
 				cfg::vertex_descriptor incremented = this->add_node(head, enode(cfg::nt_call, e)
 					(eot_oper, "+")
 					(loop_counter)
-					(eot_const, "1"));
+					(eot_const, sir_int_t(1)));
 				this->add_node(head, enode(cfg::nt_call, e)
 					(eot_oper, "=")
 					(this->make_address(loop_counter))
@@ -1319,7 +1314,7 @@ struct context
 			this->generate_destructor_chain(head, boost::next(m_auto_objects.begin()));
 
 			g[head].type = cfg::nt_exit;
-			g[head].ops.push_back(cfg::operand(cfg::ot_const, "0"));
+			g[head].ops.push_back(cfg::operand(cfg::ot_const, sir_int_t(0)));
 			if (val.type != eot_none)
 				g[head].ops.push_back(val);
 			m_exit_nodes.insert(head);
@@ -1345,7 +1340,7 @@ struct context
 			this->make_node(head, this->build_full_expr(head, s->getCond()));
 			cfg::vertex_descriptor else_head = this->duplicate_vertex(head);
 
-			this->set_cond(else_head, 0, "0");
+			this->set_cond(else_head, 0, sir_int_t(0));
 
 			this->build_stmt(head, s->getThen());
 			if (s->getElse() != 0)
@@ -1357,7 +1352,7 @@ struct context
 			cfg::vertex_descriptor cond_start = head;
 			this->make_cond_node(head, this->build_full_expr(head, s->getCond()));
 			cfg::vertex_descriptor body_head = this->duplicate_vertex(head);
-			this->set_cond(head, 0, "0");
+			this->set_cond(head, 0, sir_int_t(0));
 
 			m_break_sentinels.push_back(this->create_jump_sentinel());
 			m_continue_sentinels.push_back(this->create_jump_sentinel());
@@ -1381,7 +1376,7 @@ struct context
 
 			cfg::vertex_descriptor cond_node = this->make_cond_node(head, this->build_full_expr(head, s->getCond()));
 			cfg::vertex_descriptor loop_node = this->duplicate_vertex(head);
-			this->set_cond(head, 0, "0");
+			this->set_cond(head, 0, sir_int_t(0));
 
 			this->join_nodes(loop_node, start_node);
 
@@ -1402,7 +1397,7 @@ struct context
 			{
 				cond_node = this->make_cond_node(head, this->build_full_expr(head, s->getCond()));
 				exit_node = this->duplicate_vertex(head);
-				this->set_cond(exit_node, 0, "0");
+				this->set_cond(exit_node, 0, sir_int_t(0));
 			}
 			else
 				exit_node = add_vertex(g);
@@ -1435,7 +1430,7 @@ struct context
 			BOOST_ASSERT(!m_case_contexts.empty());
 			BOOST_ASSERT(s->getRHS() == 0 && "case lhs..rhs; gcc extension is not supported");
 
-			eop cond = eop(eot_const, s->getLHS()->EvaluateAsInt(m_fn->getASTContext()).toString(10));
+			eop cond = eop(eot_const, sir_int_t(s->getLHS()->EvaluateAsInt(m_fn->getASTContext()).getLimitedValue()));
 
 			m_case_contexts.back().second[boost::get<std::string>(cond.id)] = head;
 			this->build_stmt(head, s->getSubStmt());
@@ -1543,7 +1538,7 @@ struct context
 			remove_vertex(m_term_exit_node, g);
 
 		g[m_head].type = cfg::nt_exit;
-		g[m_head].ops.push_back(cfg::operand(cfg::ot_const, "0"));
+		g[m_head].ops.push_back(cfg::operand(cfg::ot_const, sir_int_t(0)));
 		m_exit_nodes.insert(m_head);
 
 		for (std::size_t exit_index = 0; exit_index != 1; ++exit_index)
@@ -1557,7 +1552,7 @@ struct context
 				BOOST_ASSERT(g[*it].ops.size() == 1 || g[*it].ops.size() == 2);
 				BOOST_ASSERT(g[*it].ops[0].type == cfg::ot_const);
 
-				std::size_t idx = boost::lexical_cast<std::size_t>(boost::get<std::string>(g[*it].ops[0].id));
+				std::size_t idx = boost::get<sir_int_t>(boost::get<constant>(g[*it].ops[0].id));
 				if (idx == exit_index)
 				{
 					exit_nodes.push_back(*it);
@@ -1600,7 +1595,7 @@ struct context
 
 				cfg::vertex_descriptor new_exit_node = add_vertex(g);
 				g[new_exit_node].type = cfg::nt_exit;
-				g[new_exit_node].ops.push_back(cfg::operand(cfg::ot_const, boost::lexical_cast<std::string>(exit_index)));
+				g[new_exit_node].ops.push_back(cfg::operand(cfg::ot_const, sir_int_t(exit_index)));
 				g[new_exit_node].ops.push_back(cfg::operand(cfg::ot_node, phi_node));
 
 				add_edge(phi_node, new_exit_node, g);
@@ -1821,8 +1816,8 @@ struct context
 
 }
 
-void detail::build_cfg(cfg & c, clang::FunctionDecl const * fn, clang::SourceManager const & sm,
+void detail::build_cfg(program & p, cfg & c, clang::FunctionDecl const * fn, clang::SourceManager const & sm,
 	filename_store & fnames, build_cfg_visitor_base & visitor, std::string const & static_prefix)
 {
-	context(c, fn, sm, fnames, visitor, static_prefix);
+	context(p, c, fn, sm, fnames, visitor, static_prefix);
 }

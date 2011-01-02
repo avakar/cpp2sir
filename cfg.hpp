@@ -3,10 +3,12 @@
 
 #include <boost/assert.hpp>
 #include <boost/variant.hpp>
+#include <boost/variant/recursive_variant.hpp>
 #include <boost/none.hpp>
 #include <boost/iterator/counting_iterator.hpp>
 #include <boost/iterator/iterator_facade.hpp>
 #include <boost/utility.hpp>
+#include <boost/lexical_cast.hpp>
 
 #include <algorithm>
 #include <memory>
@@ -76,6 +78,70 @@ struct fullexpr_tag
 	}
 };
 
+typedef boost::int64_t sir_int_t;
+
+struct sir_array;
+struct sir_dict;
+
+typedef boost::variant<
+	sir_int_t,
+	double,
+	std::string,
+	boost::recursive_wrapper<sir_array>,
+	boost::recursive_wrapper<sir_dict>
+> constant;
+
+struct sir_array
+{
+	std::vector<constant> values;
+
+	friend bool operator==(sir_array const & lhs, sir_array const & rhs)
+	{
+		return lhs.values == rhs.values;
+	}
+
+	friend bool operator!=(sir_array const & lhs, sir_array const & rhs)
+	{
+		return lhs.values != rhs.values;
+	}
+
+	friend std::ostream & operator<<(std::ostream & out, sir_array const & value)
+	{
+		out << "[";
+		if (!value.values.empty())
+			out << value.values[0];
+		for (std::size_t i = 1; i < value.values.size(); ++i)
+			out << ", " << value.values[i];
+		return out << "]";
+	}
+};
+
+struct sir_dict
+{
+	std::map<std::string, constant> values;
+
+	friend bool operator==(sir_dict const & lhs, sir_dict const & rhs)
+	{
+		return lhs.values == rhs.values;
+	}
+
+	friend bool operator!=(sir_dict const & lhs, sir_dict const & rhs)
+	{
+		return lhs.values != rhs.values;
+	}
+
+	friend std::ostream & operator<<(std::ostream & out, sir_dict const & value)
+	{
+		out << "{";
+		std::map<std::string, constant>::const_iterator ci = value.values.begin();
+		if (ci != value.values.end())
+			out << "\"" << ci->first << "\": " << ci->second;
+		for (++ci; ci != value.values.end(); ++ci)
+			out << ", " << "\"" << ci->first << "\": " << ci->second;
+		return out << "}";
+	}
+};
+
 class cfg
 {
 private:
@@ -90,7 +156,13 @@ public:
 	enum node_type { nt_none, nt_exit, nt_value, nt_call, nt_phi };
 	enum op_type { ot_none, ot_func, ot_oper, ot_const, ot_member, ot_node, ot_var, ot_varptr };
 
-	typedef boost::variant<boost::none_t, std::string, vertex_descriptor> op_id;
+	typedef boost::variant<boost::none_t, constant, vertex_descriptor> op_id;
+
+	template <typename T>
+	friend T get_const(op_id const & op)
+	{
+		return boost::get<T>(boost::get<constant>(op));
+	}
 
 	struct operand
 	{
@@ -116,9 +188,9 @@ public:
 	struct edge
 	{
 		std::size_t id;
-		std::string cond;
+		constant cond;
 
-		edge(std::size_t id = 0, std::string const & cond = std::string())
+		edge(std::size_t id = 0, constant const & cond = sir_int_t(0))
 			: id(id), cond(cond)
 		{
 		}
@@ -443,9 +515,32 @@ public:
 	void vfn_param_counts(vfn_param_counts_type const & v) { m_vfn_param_counts = v; }
 	vfn_param_counts_type const & vfn_param_counts() const { return m_vfn_param_counts; }
 
+	std::string get_string_literal_symbol(std::vector<sir_int_t> const & lit)
+	{
+		std::map<std::vector<sir_int_t>, std::string>::const_iterator ci = m_string_literal_symbols.find(lit);
+		if (ci == m_string_literal_symbols.end())
+		{
+			// FIXME: these need to be made unique
+			ci = m_string_literal_symbols.insert(std::make_pair(lit,
+				"_Y" + boost::lexical_cast<std::string>(m_string_literal_symbols.size()))).first;
+			
+			sir_array a;
+			for (std::size_t i = 0; i < lit.size(); ++i)
+				a.values.push_back(lit[i]);
+			m_globals[ci->second] = a;
+		}
+
+		return ci->second;
+	}
+
+	std::map<std::string, constant> const & globals() const { return m_globals; }
+
 private:
 	std::map<std::string, cfg> m_cfgs;
 	filename_store m_fnames;
+
+	std::map<std::vector<sir_int_t>, std::string> m_string_literal_symbols;
+	std::map<std::string, constant> m_globals;
 
 	vfn_map_type m_vfn_map;
 	vfn_param_counts_type m_vfn_param_counts;
