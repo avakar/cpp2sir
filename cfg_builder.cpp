@@ -145,7 +145,7 @@ struct context
 	std::map<clang::GotoStmt const *, cfg::vertex_descriptor> m_gotos;
 	std::map<clang::LabelStmt const *, cfg::vertex_descriptor> m_labels;
 
-	typedef std::pair<cfg::vertex_descriptor, std::map<std::string, cfg::vertex_descriptor> > case_context_t;
+	typedef std::pair<cfg::vertex_descriptor, std::map<sir_int_t, cfg::vertex_descriptor> > case_context_t;
 	std::vector<case_context_t> m_case_contexts;
 
 	std::map<clang::NamedDecl const *, std::string> m_registered_names;
@@ -1432,7 +1432,7 @@ struct context
 
 			eop cond = eop(eot_const, sir_int_t(s->getLHS()->EvaluateAsInt(m_fn->getASTContext()).getLimitedValue()));
 
-			m_case_contexts.back().second[boost::get<std::string>(cond.id)] = head;
+			m_case_contexts.back().second[get_const<sir_int_t>(cond.id)] = head;
 			this->build_stmt(head, s->getSubStmt());
 		}
 		else if (clang::SwitchStmt const * s = llvm::dyn_cast<clang::SwitchStmt>(stmt))
