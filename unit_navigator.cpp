@@ -10,7 +10,7 @@ void unit_navigator::filter(std::string const & prefix)
 	for (std::set<clang::FunctionDecl const *>::const_iterator it = m_fns.begin(); it != m_fns.end(); ++it)
 	{
 		clang::FunctionDecl const * fn = *it;
-		if (make_decl_name(fn).substr(0, prefix.size()) != prefix)
+		if (make_decl_name(fn).substr(0, prefix.size()) == prefix)
 			fns.insert(fn);
 	}
 
