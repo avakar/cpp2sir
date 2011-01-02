@@ -699,7 +699,7 @@ struct context
 		else if (clang::StringLiteral const * e = llvm::dyn_cast<clang::StringLiteral>(expr))
 		{
 			std::vector<sir_int_t> values = string_literal_to_value_array(e);
-			std::string lit_symbol = m_program.get_string_literal_symbol(values);
+			std::string lit_symbol = m_program.get_string_literal_symbol(values, m_static_prefix);
 			return eop(eot_var, lit_symbol);
 		}
 		else if (clang::DeclRefExpr const * e = llvm::dyn_cast<clang::DeclRefExpr>(expr))

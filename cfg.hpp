@@ -516,13 +516,13 @@ public:
 	void vfn_param_counts(vfn_param_counts_type const & v) { m_vfn_param_counts = v; }
 	vfn_param_counts_type const & vfn_param_counts() const { return m_vfn_param_counts; }
 
-	std::string get_string_literal_symbol(std::vector<sir_int_t> const & lit)
+	std::string get_string_literal_symbol(std::vector<sir_int_t> const & lit, std::string const & static_prefix)
 	{
 		std::map<std::vector<sir_int_t>, std::string>::const_iterator ci = m_string_literal_symbols.find(lit);
 		if (ci == m_string_literal_symbols.end())
 		{
-			// FIXME: these need to be made unique
 			ci = m_string_literal_symbols.insert(std::make_pair(lit,
+				"_S" + boost::lexical_cast<std::string>(static_prefix.size()) + static_prefix +
 				"_Y" + boost::lexical_cast<std::string>(m_string_literal_symbols.size()))).first;
 			
 			sir_array a;
