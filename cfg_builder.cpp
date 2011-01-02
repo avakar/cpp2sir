@@ -909,12 +909,8 @@ struct context
 		else if (clang::SizeOfAlignOfExpr const * e = llvm::dyn_cast<clang::SizeOfAlignOfExpr>(expr))
 		{
 			// TODO: is there a better way?
-			// FIXME: use numbers
-			BOOST_ASSERT(e->isSizeOf());
-			if (e->isArgumentType())
-				return eop(eot_const, "sizeof:" + e->getArgumentType().getAsString());
-			else
-				return eop(eot_const, "sizeof:" + e->getArgumentExpr()->getType().getAsString());
+			BOOST_ASSERT(e->isSizeOf() && e->isIntegerConstantExpr(m_fn->getASTContext()));
+			return eop(eot_const, sir_int_t(e->EvaluateAsInt(m_fn->getASTContext()).getLimitedValue()));
 		}
 		else if (clang::MemberExpr const * e = llvm::dyn_cast<clang::MemberExpr>(expr))
 		{
