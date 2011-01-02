@@ -8,9 +8,19 @@ namespace {
 struct convert_constant
 	: boost::static_visitor<Json::Value>
 {
+	Json::Value operator()(boost::none_t const &) const
+	{
+		return Json::Value(Json::nullValue);
+	}
+
 	Json::Value operator()(sir_int_t const & v) const
 	{
 		return Json::Value((int)v);
+	}
+
+	Json::Value operator()(double const & v) const
+	{
+		return Json::Value(v);
 	}
 
 	Json::Value operator()(std::string const & v) const

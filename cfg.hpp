@@ -84,6 +84,7 @@ struct sir_array;
 struct sir_dict;
 
 typedef boost::variant<
+	boost::none_t,
 	sir_int_t,
 	double,
 	std::string,
@@ -190,7 +191,7 @@ public:
 		std::size_t id;
 		constant cond;
 
-		edge(std::size_t id = 0, constant const & cond = sir_int_t(0))
+		edge(std::size_t id = 0, constant const & cond = boost::none)
 			: id(id), cond(cond)
 		{
 		}
