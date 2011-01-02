@@ -28,6 +28,9 @@ add_executable(cpp2sir ast_pretty_printer.cpp main.cpp cfg.cpp
     cfg_builder.cpp cfg_json_writer.cpp unit_navigator.cpp util.cpp json/json_reader.cpp
     mangle.cpp
     json/json_value.cpp json/json_writer.cpp)
+if (MSVC)
+    add_definitions("/wd4146 /wd4800 /wd4355 /wd4345 /wd4244 /wd4624 /wd4291")
+endif (MSVC)
 target_link_libraries(cpp2sir ${CLANG_LIBS})
 set_property(
     TARGET cpp2sir
