@@ -1,0 +1,4 @@
+* goto does not call destructors
+* arguments passed by copy are not in fact copied (do it in callexpr)
+* exception values are not propagated
+* tests are broken
