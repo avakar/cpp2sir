@@ -117,6 +117,18 @@ struct context
 		}
 	};
 
+	// An auto_var_registration object is created for each (possibly temporary) variable
+	// with non-trivial destructor. Such variables must be destroyed at the end of their
+	// scope and in the case of an exception.
+	//
+	// A list of these registrations is held in m_auto_objects.
+	// These objects always have their excnodes tied to the excnode of their predecessor,
+	// forming a chain.
+	//
+	// A registration without a valid destr pointer is called empty---such registrations
+	// may be injected for example by try/catch statements.
+	//
+	// Jump statements use the registration list to generate the correct destructor chain.
 	struct auto_var_registration
 	{
 		clang::CXXDestructorDecl const * destr;
@@ -477,6 +489,10 @@ struct context
 		for (auto_object_iterator it = m_auto_objects.end(); it != new_end; --it)
 		{
 			auto_var_registration const & reg = *boost::prior(it);
+
+			// This may be an empty registration injected by try statement
+			if (!reg.destr)
+				continue;
 
 			cfg::vertex_descriptor node = this->add_node(head, enode(cfg::nt_call)
 				(eot_func, this->get_name(reg.destr))
@@ -1486,8 +1502,85 @@ struct context
 		}
 		else if (clang::CXXTryStmt const * s = llvm::dyn_cast<clang::CXXTryStmt>(stmt))
 		{
-			// TODO
+			eop exc_object(eot_varptr, "e:"); // TODO: look at this when implementing exception object passing.
+
+			std::vector<cfg::vertex_descriptor> handled_heads;
+
+			cfg::vertex_descriptor handler_begin = add_vertex(g);
+			cfg::vertex_descriptor handler_head = handler_begin;
+			for (unsigned i = 0; i != s->getNumHandlers(); ++i)
+			{
+				clang::CXXCatchStmt const * handler = s->getHandler(i);
+				if (handler->getExceptionDecl())
+				{
+					cfg::vertex_descriptor match_node = this->add_node(handler_head, enode(cfg::nt_call)
+						(eot_oper, "cpp_exc_match")
+						(exc_object)
+						(eot_varptr, make_rtti_name(m_fn->getASTContext(), handler->getCaughtType(), m_static_prefix)));
+
+					cfg::vertex_descriptor false_head = this->duplicate_vertex(handler_head);
+					this->set_cond(false_head, 0, sir_int_t(0));
+
+					clang::VarDecl const * var = handler->getExceptionDecl();
+					if (var->getIdentifier())
+					{
+						if (var->getType()->isReferenceType())
+						{
+							this->add_node(handler_head, enode(cfg::nt_call)
+								(eot_oper, "=")
+								(eot_varptr, this->get_name(var))
+								(eot_node, match_node));
+						}
+						else if  (var->getType()->isScalarType() || var->getType()->isPointerType())
+							this->add_node(handler_head, enode(cfg::nt_call)
+								(eot_oper, "=")
+								(eot_varptr, this->get_name(var))
+								(eot_nodetgt, match_node));
+						else
+						{
+							// TODO: implement catch by value
+							BOOST_ASSERT(0 && "catch by value for complex types is not implemented yet");
+						}
+					}
+
+					this->build_stmt(handler_head, handler->getHandlerBlock());
+					handled_heads.push_back(handler_head);
+					handler_head = false_head;
+				}
+				else
+				{
+					this->build_stmt(handler_head, handler->getHandlerBlock());
+					handled_heads.push_back(handler_head);
+					handler_head = add_vertex(g);
+				}
+			}
+
+			this->join_nodes(handler_head, m_auto_objects.back().excnode);
+
+			BOOST_ASSERT(!handled_heads.empty());
+			for (std::size_t i = 1; i < handled_heads.size(); ++i)
+				this->join_nodes(handled_heads[i], handled_heads[0]);
+
+			// Destroy the exception object.
+			this->add_node(handled_heads[0], enode(cfg::nt_call)
+				(eot_oper, "cpp_exc_destroy")
+				(exc_object));
+
+			this->add_node(handled_heads[0], enode(cfg::nt_call)
+				(eot_oper, "cpp_exc_free")
+				(exc_object));
+
+			// Register our top-level match node
+			auto_var_registration reg = { 0, eop(), handler_begin };
+			m_auto_objects.push_back(reg);
+			auto_object_iterator regiter = boost::prior(m_auto_objects.end());
+			
 			this->build_stmt(head, s->getTryBlock());
+
+			BOOST_ASSERT(!m_auto_objects.empty() && regiter == boost::prior(m_auto_objects.end()));
+			m_auto_objects.pop_back();
+
+			this->join_nodes(handled_heads[0], head);
 		}
 		else if (clang::LabelStmt const * s = llvm::dyn_cast<clang::LabelStmt>(stmt))
 		{
