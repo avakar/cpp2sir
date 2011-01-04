@@ -24,14 +24,34 @@ set(CLANG_LIBS
     clangSerialization
     )
 
-add_executable(cpp2sir ast_pretty_printer.cpp main.cpp cfg.cpp
-    cfg_builder.cpp cfg_json_writer.cpp unit_navigator.cpp util.cpp json/json_reader.cpp
-    mangle.cpp
-    json/json_value.cpp json/json_writer.cpp)
+set(CPP2SIR_HEADERS
+	mangle.h
+	ast_pretty_printer.hpp
+	cfg.hpp
+	cfg_builder.hpp
+	cfg_json_writer.hpp
+	unit_navigator.hpp
+	util.hpp
+	)
+
+set(CPP2SIR_SOURCES
+	ast_pretty_printer.cpp
+	cfg.cpp
+	cfg_builder.cpp
+	cfg_json_writer.cpp
+	main.cpp
+	mangle.cpp
+	unit_navigator.cpp
+	util.cpp
+	)
+
+add_subdirectory(json)
+
+add_executable(cpp2sir ${CPP2SIR_SOURCES} ${CPP2SIR_HEADERS})
 if (MSVC)
     add_definitions("/wd4146 /wd4800 /wd4355 /wd4345 /wd4244 /wd4624 /wd4291")
 endif (MSVC)
-target_link_libraries(cpp2sir ${CLANG_LIBS})
+target_link_libraries(cpp2sir libjson ${CLANG_LIBS})
 set_property(
     TARGET cpp2sir
     PROPERTY COMPILE_DEFINITIONS __STDC_LIMIT_MACROS __STDC_CONSTANT_MACROS _SCL_SECURE_NO_WARNINGS
