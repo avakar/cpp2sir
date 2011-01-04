@@ -1033,10 +1033,10 @@ struct context
 		else if (clang::CXXThrowExpr const * e = llvm::dyn_cast<clang::CXXThrowExpr>(expr))
 		{
 			eop exc_mem = eop(eot_node, this->add_node(head, enode(cfg::nt_call)
-				(eot_oper, "magic_alloc")
-				(eot_const, "sizeof:" + e->getSubExpr()->getType().getAsString())));
+				(eot_oper, "cpp_exc_alloc")
+				(eot_varptr, make_rtti_name(m_fn->getASTContext(), e->getType().getUnqualifiedType(), m_static_prefix))));
 
-			this->init_object(head, exc_mem, e->getType(), e->getSubExpr(), false);
+			this->init_object(head, exc_mem, e->getSubExpr()->getType(), e->getSubExpr(), false);
 			// TODO: handle exceptions from initialization
 
 			this->join_nodes(head, m_auto_objects.back().excnode);

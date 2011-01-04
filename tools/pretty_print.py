@@ -6,6 +6,8 @@ def _pretty_print_node(node, nodemap):
             strops.append('$' + str(nodemap[op[1]]))
         elif op[0] == 'const':
             strops.append(repr(op[1]))
+        elif op[0] == 'varptr':
+            strops.append('&' + str(op[1]))
         else:
             strops.append(str(op[1]))
 

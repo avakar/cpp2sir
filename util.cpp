@@ -54,3 +54,13 @@ std::string make_decl_name(clang::NamedDecl const * decl, std::string const & st
 
 	return name + std::string(res.begin(), res.end());
 }
+
+std::string make_rtti_name(clang::ASTContext & astctx, clang::QualType type, std::string const & static_prefix)
+{
+	clang::CodeGen::MangleContext ctx(astctx);
+
+	llvm::SmallVector<char, 64> res;
+	ctx.mangleCXXRTTI(type, res);
+
+	return std::string(res.begin(), res.end());
+}
