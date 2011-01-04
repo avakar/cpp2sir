@@ -242,7 +242,7 @@ int main(int argc, char * argv[])
 		comp_inst.createDiagnostics(args.size(), (char **)&args[0]);
 
 		if (!c.printJsonCfg && !c.printReadableAST && !c.debugCFG && !c.printUnitAST && !c.buildCfg)
-			c.printReadableAST = true;
+			c.printJsonCfg = 2;
 
 		MyASTDumpAction act(c);
 		comp_inst.ExecuteAction(act);
