@@ -204,11 +204,14 @@ int main(int argc, char * argv[])
 		c.static_prefix = "__unique";
 
 		// Parse the arguments
+		bool print_help = false;
 		for (int i = 1; i < argc; ++i)
 		{
 			std::string arg = argv[i];
 			if (arg == "-a")
 				c.printReadableAST = true;
+			if (arg == "-h" || arg == "--help")
+				print_help = true;
 			else if (arg == "-j")
 				c.printJsonCfg = 1;
 			else if (arg == "-J")
@@ -223,12 +226,18 @@ int main(int argc, char * argv[])
 				c.showFnNames = true;
 			else if (arg == "--dumpprogress")
 				c.dump_progress = true;
-			else if (arg == "--staticprefix" && i + 1 < argc)
+			else if (arg == "--unitid" && i + 1 < argc)
 				c.static_prefix = argv[++i];
 			else if (arg == "--filter" && i + 1 < argc)
 				c.filter = argv[++i];
 			else
 				args.push_back(argv[i]);
+		}
+
+		if (print_help)
+		{
+			std::cout << "Usage: " << argv[0] << "[-Jjuca] [--unitid <id>] [<clang options>] <filename>" << std::endl;
+			return 0;
 		}
 
 		clang::CompilerInstance comp_inst;
