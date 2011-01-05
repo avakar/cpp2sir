@@ -2,3 +2,4 @@
 * arguments passed by copy are not in fact copied (do it in callexpr)
 * exception values are not propagated
 * tests are broken
+* initialization of globals and local statics in not performed
