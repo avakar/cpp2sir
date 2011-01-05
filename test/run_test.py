@@ -6,7 +6,7 @@ if __name__ == '__main__':
     args = args.parse_args()
 
     import os.path
-    parser = args.parser if args.parser else os.path.join(os.path.split(__file__)[0], '..', 'Debug', 'cppparser')
+    parser = args.parser if args.parser else os.path.join(os.path.split(__file__)[0], '..', 'build', 'Debug', 'cpp2sir')
 
     templs = args.template if args.template else ['*.cfg']
     templs = [os.path.join(arg, '*.cfg') if os.path.isdir(arg) else arg for arg in templs]
