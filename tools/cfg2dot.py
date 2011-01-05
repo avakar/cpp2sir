@@ -1,5 +1,8 @@
 from xml.sax.saxutils import escape as xml_escape
 
+def convert_sir_const(c):
+    return repr(c)
+
 def cfg2dot(fin, fout):
     import json
     src = json.load(fin)['cfgs']
@@ -48,9 +51,9 @@ def cfg2dot(fin, fout):
             fout.write('    node%d_%d [label="<f1> %d |<f2> %s"];\n' % (fnidx, i, i, xml_escape(opstr)));
             for succ in node[1]:
                 if succ[1] == 0:
-                    fout.write('    node%d_%d -> node%d_%d [label="%s"];\n' % (fnidx, i, fnidx, succ[0], xml_escape(succ[2])))
+                    fout.write('    node%d_%d -> node%d_%d [label="%s"];\n' % (fnidx, i, fnidx, succ[0], xml_escape(convert_sir_const(succ[2]))))
                 if succ[1] == 1:
-                    fout.write('    node%d_%d -> node%d_%d [label="%s",style="dotted"];\n' % (fnidx, i, fnidx, succ[0], xml_escape(succ[2])))
+                    fout.write('    node%d_%d -> node%d_%d [label="%s",style="dotted"];\n' % (fnidx, i, fnidx, succ[0], xml_escape(convert_sir_const(succ[2]))))
         fnidx += 1
     fout.write('}')
 
