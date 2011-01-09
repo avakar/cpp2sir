@@ -419,6 +419,21 @@ struct context
 		return res;
 	}
 
+	void attach_range_tag(cfg::node & n, clang::SourceRange const & sr)
+	{
+		range_tag r = {};
+
+		clang::PresumedLoc pl = m_sm.getPresumedLoc(sr.getBegin());
+		r.fname = m_fnames.add(pl.getFilename());
+		r.start_line = pl.getLine();
+		r.start_col = pl.getColumn();
+		pl = m_sm.getPresumedLoc(sr.getEnd());
+		r.end_line = pl.getLine();
+		r.end_col = pl.getColumn();
+
+		n.tags.insert(g.add_tag(r));
+	}
+
 	cfg::node convert_node(cfg::vertex_descriptor & head, enode const & node)
 	{
 		cfg::node n;
@@ -427,20 +442,7 @@ struct context
 			n.ops.push_back(this->make_rvalue(head, node.ops[i]));
 
 		if (node.data)
-		{
-			range_tag r = {};
-
-			clang::SourceRange sr = node.data->getSourceRange();
-			clang::PresumedLoc pl = m_sm.getPresumedLoc(sr.getBegin());
-			r.fname = m_fnames.add(pl.getFilename());
-			r.start_line = pl.getLine();
-			r.start_col = pl.getColumn();
-			pl = m_sm.getPresumedLoc(sr.getEnd());
-			r.end_line = pl.getLine();
-			r.end_col = pl.getColumn();
-
-			n.tags.insert(g.add_tag(r));
-		}
+			this->attach_range_tag(n, node.data->getSourceRange());
 		return n;
 	}
 
@@ -1617,6 +1619,17 @@ struct context
 		}
 	}
 
+	void attach_range_tag_to_exit_nodes()
+	{
+		std::pair<cfg::vertex_iterator, cfg::vertex_iterator> vertex_range = vertices(g);
+		for (; vertex_range.first != vertex_range.second; ++vertex_range.first)
+		{
+			cfg::node & n = g[*vertex_range.first];
+			if (n.type == cfg::nt_exit)
+				this->attach_range_tag(n, m_fn->getBodyRBrace());
+		}
+	}
+	
 	void finish()
 	{
 		this->backpatch_gotos();
@@ -1720,6 +1733,7 @@ struct context
 		}
 
 		this->simplify();
+		this->attach_range_tag_to_exit_nodes();
 	}
 
 	void simplify()
