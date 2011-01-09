@@ -10,7 +10,7 @@ void unit_navigator::filter(std::string const & prefix)
 	for (std::set<clang::FunctionDecl const *>::const_iterator it = m_fns.begin(); it != m_fns.end(); ++it)
 	{
 		clang::FunctionDecl const * fn = *it;
-		if (make_decl_name(fn).substr(0, prefix.size()) == prefix)
+		if (m_nm.make_decl_name(fn).substr(0, prefix.size()) == prefix)
 			fns.insert(fn);
 	}
 
@@ -25,7 +25,7 @@ void unit_navigator::build(clang::DeclContext const * declctx)
 
 		std::string name;
 		if (clang::NamedDecl const * nd = llvm::dyn_cast<clang::NamedDecl>(decl))
-			name = make_decl_name(nd);
+			name = m_nm.make_decl_name(nd);
 
 		if (clang::NamespaceDecl * nsdecl = dyn_cast<clang::NamespaceDecl>(decl))
 		{
@@ -47,9 +47,9 @@ void unit_navigator::build(clang::DeclContext const * declctx)
 			for (clang::CXXMethodDecl::method_iterator it = fnDecl->begin_overridden_methods();
 				it != fnDecl->end_overridden_methods(); ++it)
 			{
-				m_vfns.insert(std::make_pair("v:" + make_decl_name(*it), name));
+				m_vfns.insert(std::make_pair("v:" + m_nm.make_decl_name(*it), name));
 				m_vfn_param_count.insert(
-					std::make_pair("v:" + make_decl_name(*it), 1 + fnDecl->getNumParams() + fnDecl->isVariadic()));
+					std::make_pair("v:" + m_nm.make_decl_name(*it), 1 + fnDecl->getNumParams() + fnDecl->isVariadic()));
 			}
 		}
 		else if (clang::FunctionDecl * fnDecl = dyn_cast<clang::FunctionDecl>(decl))

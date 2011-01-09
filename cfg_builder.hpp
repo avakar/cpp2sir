@@ -38,7 +38,7 @@ struct build_cfg_visitor : build_cfg_visitor_base
 	Visitor m_visitor;
 };
 
-void build_cfg(program & p, cfg & c, clang::FunctionDecl const * fn, clang::SourceManager const & sm,
+void build_cfg(program & p, cfg & c, name_mangler & nm, clang::FunctionDecl const * fn, clang::SourceManager const & sm,
 	filename_store & fnames, build_cfg_visitor_base & visitor, std::string const & static_prefix);
 
 }
@@ -57,13 +57,13 @@ program build_program(unit_navigator const & un, clang::SourceManager const & sm
 		if (!fn->hasBody())
 			continue;
 
-		std::string const & fnname = make_decl_name(fn, static_prefix);
+		std::string const & fnname = un.nm().make_decl_name(fn, static_prefix);
 		if (!visitor.function_started(fnname))
 			continue;
 
 		cfg c;
 		detail::build_cfg_visitor<Visitor> cfg_visitor(visitor);
-		build_cfg(res, c, fn, sm, res.fnames(), cfg_visitor, static_prefix);
+		build_cfg(res, c, un.nm(), fn, sm, res.fnames(), cfg_visitor, static_prefix);
 
 		visitor.function_completed(fnname, c);
 		res.add_cfg(fnname, c);

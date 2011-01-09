@@ -28,7 +28,7 @@ clang::LinkageSpecDecl::LanguageIDs get_linkage_specifier(clang::NamedDecl const
 
 }
 
-std::string make_decl_name(clang::NamedDecl const * decl, std::string const & static_prefix)
+std::string name_mangler::make_decl_name(clang::NamedDecl const * decl, std::string const & static_prefix)
 {
 	std::string name;
 
@@ -52,12 +52,14 @@ std::string make_decl_name(clang::NamedDecl const * decl, std::string const & st
 	else
 		ctx.mangleName(decl, res);
 
-	return name + std::string(res.begin(), res.end());
+	name.append(res.begin(), res.end());
+	m_aliases.insert(std::make_pair(name, decl->getQualifiedNameAsString()));
+	return name;
 }
 
-std::string make_rtti_name(clang::ASTContext & astctx, clang::QualType type, std::string const & static_prefix)
+std::string name_mangler::make_rtti_name(clang::QualType type, std::string const & static_prefix)
 {
-	clang::CodeGen::MangleContext ctx(astctx);
+	clang::CodeGen::MangleContext ctx(m_ctx);
 
 	llvm::SmallVector<char, 64> res;
 	ctx.mangleCXXRTTI(type, res);

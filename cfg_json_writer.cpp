@@ -49,13 +49,13 @@ struct convert_constant
 class context
 {
 public:
-	static Json::Value serialize(program const & prog)
+	static Json::Value serialize(program const & prog, name_mangler const & nm)
 	{
-		return context().serialize_impl(prog);
+		return context().serialize_impl(prog, nm);
 	}
 
 private:
-	Json::Value serialize_impl(program const & prog)
+	Json::Value serialize_impl(program const & prog, name_mangler const & nm)
 	{
 		Json::Value json_cfgs(Json::objectValue);
 
@@ -237,6 +237,17 @@ private:
 		for (std::map<std::string, constant>::const_iterator it = globals.begin(); it != globals.end(); ++it)
 			json_globals[it->first] = it->second.apply_visitor(convert_constant());
 		json_prog["globals"] = json_globals;
+		
+		Json::Value json_aliases(Json::objectValue);
+		name_mangler::alias_map_t const & aliases = nm.aliases();
+		for (name_mangler::alias_map_t::const_iterator it = aliases.begin(); it != aliases.end(); ++it)
+		{
+			Json::Value & json_alias_list = json_aliases[it->first];
+			if (!json_alias_list.isArray())
+				json_alias_list = Json::Value(Json::arrayValue);
+			json_alias_list.append(it->second);
+		}
+		json_prog["aliases"] = json_aliases;
 
 		return json_prog;
 	}
@@ -275,9 +286,9 @@ private:
 
 }
 
-void cfg_json_write(std::ostream & out, program const & prog, bool readable)
+void cfg_json_write(std::ostream & out, program const & prog, name_mangler const & nm, bool readable)
 {
-	Json::Value json_prog = context::serialize(prog);
+	Json::Value json_prog = context::serialize(prog, nm);
 	if (readable)
 	{
 		Json::StyledWriter writer;

@@ -117,7 +117,8 @@ public:
 		}
 #endif
 
-		unit_navigator un(ctx.getTranslationUnitDecl());
+		name_mangler nm(ctx);
+		unit_navigator un(nm, ctx.getTranslationUnitDecl());
 		if (!m_c.filter.empty())
 			un.filter(m_c.filter);
 
@@ -133,7 +134,7 @@ public:
 		if (m_c.printJsonCfg)
 		{
 			program prog = build_program(un, m_ci.getSourceManager(), cfg_build_visitor(m_ci, m_c), m_c.static_prefix);
-			cfg_json_write(std::cout, prog, m_c.printJsonCfg == 1);
+			cfg_json_write(std::cout, prog, nm, m_c.printJsonCfg == 1);
 		}
 
 		if (m_c.printUnitAST)

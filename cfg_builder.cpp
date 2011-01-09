@@ -41,9 +41,9 @@ std::vector<sir_int_t> string_literal_to_value_array(clang::StringLiteral const 
 
 struct context
 {
-	context(program & p, cfg & c, clang::FunctionDecl const * fn, clang::SourceManager const & sm,
+	context(program & p, cfg & c, name_mangler & nm, clang::FunctionDecl const * fn, clang::SourceManager const & sm,
 		filename_store & fnames, detail::build_cfg_visitor_base & visitor, std::string const & static_prefix)
-		: m_program(p), m_static_prefix(static_prefix), m_sm(sm), m_fnames(fnames), m_visitor(visitor), g(c), m_fn(fn),
+		: m_program(p), m_name_mangler(nm), m_static_prefix(static_prefix), m_sm(sm), m_fnames(fnames), m_visitor(visitor), g(c), m_fn(fn),
 		m_head(add_vertex(g)), m_exc_exit_node(add_vertex(g)), m_term_exit_node(add_vertex(g))
 	{
 		g.entry(m_head);
@@ -61,6 +61,7 @@ struct context
 	}
 
 	program & m_program;
+	name_mangler & m_name_mangler;
 	std::string m_static_prefix;
 	clang::SourceManager const & m_sm;
 	filename_store & m_fnames;
@@ -216,7 +217,7 @@ struct context
 	{
 		std::map<clang::NamedDecl const *, std::string>::const_iterator it = m_registered_names.find(decl);
 		if (it == m_registered_names.end())
-			return make_decl_name(decl, m_static_prefix);
+			return m_name_mangler.make_decl_name(decl, m_static_prefix);
 		else
 			return it->second;
 	}
@@ -1050,7 +1051,7 @@ struct context
 		{
 			eop exc_mem = eop(eot_node, this->add_node(head, enode(cfg::nt_call)
 				(eot_oper, "cpp_exc_alloc")
-				(eot_varptr, make_rtti_name(m_fn->getASTContext(), e->getType().getUnqualifiedType(), m_static_prefix))));
+				(eot_varptr, m_name_mangler.make_rtti_name(e->getType().getUnqualifiedType(), m_static_prefix))));
 
 			this->init_object(head, exc_mem, e->getSubExpr()->getType(), e->getSubExpr(), false);
 			// TODO: handle exceptions from initialization
@@ -1516,7 +1517,7 @@ struct context
 					cfg::vertex_descriptor match_node = this->add_node(handler_head, enode(cfg::nt_call)
 						(eot_oper, "cpp_exc_match")
 						(exc_object)
-						(eot_varptr, make_rtti_name(m_fn->getASTContext(), handler->getCaughtType(), m_static_prefix)));
+						(eot_varptr, m_name_mangler.make_rtti_name(handler->getCaughtType(), m_static_prefix)));
 
 					cfg::vertex_descriptor false_head = this->duplicate_vertex(handler_head);
 					this->set_cond(false_head, 0, sir_int_t(0));
@@ -1905,8 +1906,8 @@ struct context
 
 }
 
-void detail::build_cfg(program & p, cfg & c, clang::FunctionDecl const * fn, clang::SourceManager const & sm,
+void detail::build_cfg(program & p, cfg & c, name_mangler & nm, clang::FunctionDecl const * fn, clang::SourceManager const & sm,
 	filename_store & fnames, build_cfg_visitor_base & visitor, std::string const & static_prefix)
 {
-	context(p, c, fn, sm, fnames, visitor, static_prefix);
+	context(p, c, nm, fn, sm, fnames, visitor, static_prefix);
 }
