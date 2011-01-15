@@ -853,7 +853,7 @@ struct context
 			else
 			{
 				callee_op = this->build_expr(head, e->getCallee());
-				fntype = llvm::dyn_cast<clang::FunctionProtoType>(e->getCallee()->getType()->getCanonicalTypeInternal()->getPointeeType().getTypePtr());
+				fntype = llvm::dyn_cast<clang::FunctionProtoType>(e->getCallee()->getType()->getUnqualifiedDesugaredType()->getPointeeType()->getUnqualifiedDesugaredType());
 			}
 
 			BOOST_ASSERT(fntype);
@@ -890,7 +890,9 @@ struct context
 
 			cfg::vertex_descriptor call_node = this->add_node(head, node);
 			this->connect_to_term(call_node);
-			this->connect_to_exc(call_node);
+
+			if (!fntype->hasEmptyExceptionSpec())
+				this->connect_to_exc(call_node);
 
 			if (result_op.type != eot_none)
 				return result_op;
