@@ -1822,7 +1822,7 @@ struct context
 		m_block_lifetimes.push_back(lifetime_context_t());
 		for (clang::CXXConstructorDecl::init_const_iterator it = fn->init_begin(); it != fn->init_end(); ++it)
 		{
-			clang::CXXBaseOrMemberInitializer const * init = *it;
+			clang::CXXCtorInitializer const * init = *it;
 			if (init->isMemberInitializer())
 			{
 				BOOST_ASSERT(!init->isBaseInitializer());

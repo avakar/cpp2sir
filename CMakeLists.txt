@@ -25,7 +25,6 @@ set(CLANG_LIBS
     )
 
 set(CPP2SIR_HEADERS
-	mangle.h
 	ast_pretty_printer.hpp
 	cfg.hpp
 	cfg_builder.hpp
@@ -40,7 +39,6 @@ set(CPP2SIR_SOURCES
 	cfg_builder.cpp
 	cfg_json_writer.cpp
 	main.cpp
-	mangle.cpp
 	unit_navigator.cpp
 	util.cpp
 	)

@@ -2,14 +2,18 @@
 #define CPPPARSER_UTIL_HPP
 
 #include <clang/AST/Decl.h>
+#include <clang/AST/ASTContext.h>
+#include <clang/AST/Mangle.h>
+
 #include <string>
 #include <map>
+#include <memory>
 
 class name_mangler
 {
 public:
 	explicit name_mangler(clang::ASTContext & ctx)
-		: m_ctx(ctx)
+		: m_ctx(ctx), m_mangler(ctx.createMangleContext())
 	{
 	}
 
@@ -21,6 +25,7 @@ public:
 
 private:
 	clang::ASTContext & m_ctx;
+	std::auto_ptr<clang::MangleContext> m_mangler;
 	alias_map_t m_aliases;
 };
 

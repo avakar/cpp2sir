@@ -59,7 +59,7 @@ void pretty_print_decl(clang::Decl const * decl, std::ostream & out, int level)
 		{
 			for (clang::CXXConstructorDecl::init_const_iterator it = conDecl->init_begin(); it != conDecl->init_end(); ++it)
 			{
-				clang::CXXBaseOrMemberInitializer const * init = *it;
+				clang::CXXCtorInitializer const * init = *it;
 				if (!init->isBaseInitializer())
 				{
 					indent(out, level + 1);

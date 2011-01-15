@@ -4,8 +4,6 @@
 #include <boost/assert.hpp>
 #include <boost/lexical_cast.hpp>
 
-#include "mangle.h"
-
 namespace {
 
 clang::LinkageSpecDecl::LanguageIDs get_linkage_specifier(clang::NamedDecl const * decl)
@@ -42,15 +40,13 @@ std::string name_mangler::make_decl_name(clang::NamedDecl const * decl, std::str
 	if (get_linkage_specifier(decl) == clang::LinkageSpecDecl::lang_c || (!llvm::isa<clang::VarDecl>(decl) && !llvm::isa<clang::FunctionDecl>(decl)))
 		return name + decl->getNameAsString();
 
-	clang::CodeGen::MangleContext ctx(decl->getASTContext());
-
 	llvm::SmallVector<char, 64> res;
 	if (clang::CXXConstructorDecl const * ctor = llvm::dyn_cast<clang::CXXConstructorDecl>(decl))
-		ctx.mangleCXXCtor(ctor, clang::Ctor_Complete, res);
+		m_mangler->mangleCXXCtor(ctor, clang::Ctor_Complete, res);
 	else if (clang::CXXDestructorDecl const * dtor = llvm::dyn_cast<clang::CXXDestructorDecl>(decl))
-		ctx.mangleCXXDtor(dtor, clang::Dtor_Complete, res);
+		m_mangler->mangleCXXDtor(dtor, clang::Dtor_Complete, res);
 	else
-		ctx.mangleName(decl, res);
+		m_mangler->mangleName(decl, res);
 
 	name.append(res.begin(), res.end());
 	m_aliases.insert(std::make_pair(name, decl->getQualifiedNameAsString()));
@@ -59,10 +55,8 @@ std::string name_mangler::make_decl_name(clang::NamedDecl const * decl, std::str
 
 std::string name_mangler::make_rtti_name(clang::QualType type, std::string const & static_prefix)
 {
-	clang::CodeGen::MangleContext ctx(m_ctx);
-
 	llvm::SmallVector<char, 64> res;
-	ctx.mangleCXXRTTI(type, res);
+	m_mangler->mangleCXXRTTI(type, res);
 
 	return std::string(res.begin(), res.end());
 }
