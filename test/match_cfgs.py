@@ -167,7 +167,7 @@ class Cfg:
     def __getitem__(self, key):
         if isinstance(key, tuple):
             return key[1]
-        if isinstance(key, str):
+        if isinstance(key, str) or isinstance(key, unicode):
             return None
         return self.nodes[key][0], self.nodes[key][2]
 
