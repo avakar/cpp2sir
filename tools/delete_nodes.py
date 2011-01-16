@@ -3,7 +3,7 @@ def delete_nodes(fin, fnname, nodes):
     src = json.load(fin)
 
     nodes = set(nodes)
-    fn = src[fnname]
+    fn = src['cfgs'][fnname]
 
     done = False
     while not done:
