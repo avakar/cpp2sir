@@ -29,6 +29,7 @@ set(CPP2SIR_HEADERS
 	cfg.hpp
 	cfg_builder.hpp
 	cfg_json_writer.hpp
+	reg.hpp
 	unit_navigator.hpp
 	util.hpp
 	)

@@ -1,8 +1,10 @@
 #include "cfg_builder.hpp"
+#include "reg.hpp"
 
 #include <boost/assert.hpp>
 #include <boost/lexical_cast.hpp>
 #include <boost/utility.hpp>
+#include <boost/ref.hpp>
 
 #include <clang/AST/Stmt.h>
 #include <clang/AST/StmtCXX.h>
@@ -44,15 +46,9 @@ struct context
 	context(program & p, cfg & c, name_mangler & nm, clang::FunctionDecl const * fn, clang::SourceManager const & sm,
 		filename_store & fnames, detail::build_cfg_visitor_base & visitor, std::string const & static_prefix)
 		: m_program(p), m_name_mangler(nm), m_static_prefix(static_prefix), m_sm(sm), m_fnames(fnames), m_visitor(visitor), g(c), m_fn(fn),
-		m_head(add_vertex(g)), m_exc_exit_node(add_vertex(g)), m_term_exit_node(add_vertex(g))
+		m_head(add_vertex(g)), m_term_exit_node(add_vertex(g))
 	{
 		g.entry(m_head);
-
-		g[m_exc_exit_node].type = cfg::nt_exit;
-		g[m_exc_exit_node].ops.push_back(cfg::operand(cfg::ot_const, sir_int_t(1)));
-
-		auto_var_registration reg = { 0, eop(), m_exc_exit_node };
-		m_auto_objects.push_back(reg);
 
 		g[m_term_exit_node].type = cfg::nt_exit;
 		g[m_term_exit_node].ops.push_back(cfg::operand(cfg::ot_const, sir_int_t(2)));
@@ -75,85 +71,22 @@ struct context
 	cfg & g;
 	clang::FunctionDecl const * m_fn;
 
+	context_registry m_context_registry;
+	typedef context_registry::node_descriptor context_node;
+	typedef context_registry::context_type execution_context;
+	typedef std::vector<context_node> lifetime_context_t;
 
-	enum eop_type { eot_none, eot_func, eot_oper, eot_const, eot_member, eot_node, eot_var, eot_varptr, eot_nodetgt, eot_vartgt };
-
-	struct eop
-	{
-		eop_type type;
-		cfg::op_id id;
-
-		eop(cfg::operand op)
-			: type(static_cast<eop_type>(op.type)), id(op.id)
-		{
-		}
-
-		eop(eop_type type = eot_none, cfg::op_id id = boost::none)
-			: type(type), id(id)
-		{
-		}
-	};
-
-	struct enode
-	{
-		cfg::node_type type;
-		std::vector<eop> ops;
-		clang::Stmt const * data;
-
-		enode(cfg::node_type type, clang::Stmt const * data = 0)
-			: type(type), data(data)
-		{
-		}
-
-		enode & operator()(eop const & op)
-		{
-			ops.push_back(op);
-			return *this;
-		}
-
-		enode & operator()(eop_type type, cfg::op_id id)
-		{
-			ops.push_back(eop(type, id));
-			return *this;
-		}
-	};
-
-	// An auto_var_registration object is created for each (possibly temporary) variable
-	// with non-trivial destructor. Such variables must be destroyed at the end of their
-	// scope and in the case of an exception.
-	//
-	// A list of these registrations is held in m_auto_objects.
-	// These objects always have their excnodes tied to the excnode of their predecessor,
-	// forming a chain.
-	//
-	// A registration without a valid destr pointer is called empty---such registrations
-	// may be injected for example by try/catch statements.
-	//
-	// Jump statements use the registration list to generate the correct destructor chain.
-	struct auto_var_registration
-	{
-		clang::CXXDestructorDecl const * destr;
-		eop varptr;
-		cfg::vertex_descriptor excnode;
-	};
-
-	std::list<auto_var_registration> m_auto_objects;
-	typedef std::list<auto_var_registration>::iterator auto_object_iterator;
-
-	typedef std::vector<auto_object_iterator> lifetime_context_t;
 	std::vector<lifetime_context_t> m_fullexpr_lifetimes;
 	std::vector<lifetime_context_t> m_block_lifetimes;
 	std::vector<clang::Type const *> m_temporaries;
 
 	cfg::vertex_descriptor m_head;
-	std::set<cfg::vertex_descriptor> m_exit_nodes;
-	cfg::vertex_descriptor m_exc_exit_node;
 	cfg::vertex_descriptor m_term_exit_node;
 
-	typedef std::pair<cfg::vertex_descriptor, auto_object_iterator> jump_sentinel_t;
-	
-	std::vector<jump_sentinel_t> m_break_sentinels;
-	std::vector<jump_sentinel_t> m_continue_sentinels;
+	jump_registry m_exc_registry;
+	jump_registry m_return_registry;
+	std::vector<jump_registry> m_break_registries;
+	std::vector<jump_registry> m_continue_registries;
 
 	std::map<clang::GotoStmt const *, cfg::vertex_descriptor> m_gotos;
 	std::map<clang::LabelStmt const *, cfg::vertex_descriptor> m_labels;
@@ -163,15 +96,13 @@ struct context
 
 	std::map<clang::NamedDecl const *, std::string> m_registered_names;
 
-	jump_sentinel_t create_jump_sentinel()
+	eop join_jump_registry(std::vector<jump_registry> & registries, execution_context ec, cfg::vertex_descriptor target)
 	{
-		return jump_sentinel_t(add_vertex(g), boost::prior(m_auto_objects.end()));
-	}
-
-	void join_jump_sentinel(jump_sentinel_t const & s, cfg::vertex_descriptor head)
-	{
-		BOOST_ASSERT(s.second == boost::prior(m_auto_objects.end()));
-		this->join_nodes(s.first, head);
+		BOOST_ASSERT(!registries.empty());
+		jump_sentinel s = this->generate_return_paths(registries.back(), ec);
+		this->join_nodes(s.sentinel, target);
+		registries.pop_back();
+		return s.value;
 	}
 
 	void connect_to_term(cfg::vertex_descriptor v)
@@ -180,15 +111,17 @@ struct context
 		g[e].id = 2;
 	}
 
-	void connect_to_exc(cfg::vertex_descriptor v, cfg::vertex_descriptor target)
+	void connect_to_exc(cfg::vertex_descriptor v, eop value, execution_context ctx)
 	{
-		cfg::edge_descriptor e = add_edge(v, target, g).first;
+		cfg::vertex_descriptor sentinel = add_vertex(g);
+		cfg::edge_descriptor e = add_edge(v, sentinel, g).first;
 		g[e].id = 1;
+		m_exc_registry[ctx].push_back(jump_sentinel(sentinel, value));
 	}
 
-	void connect_to_exc(cfg::vertex_descriptor v)
+	void connect_to_exc(cfg::vertex_descriptor v, eop value)
 	{
-		this->connect_to_exc(v, m_auto_objects.back().excnode);
+		this->connect_to_exc(v, value, m_context_registry.current_context());
 	}
 
 	cfg::vertex_descriptor duplicate_vertex(cfg::vertex_descriptor src)
@@ -209,8 +142,11 @@ struct context
 
 	void join_nodes(cfg::vertex_descriptor src, cfg::vertex_descriptor dest)
 	{
-		g.redirect_vertex(src, dest);
-		remove_vertex(src, g);
+		if (src != g.null_vertex())
+		{
+			g.redirect_vertex(src, dest);
+			remove_vertex(src, g);
+		}
 	}
 
 	std::string get_name(clang::NamedDecl const * decl) const
@@ -451,7 +387,8 @@ struct context
 		BOOST_ASSERT(g[head].type == cfg::nt_none);
 		BOOST_ASSERT(g[head].ops.empty());
 
-		g[head] = this->convert_node(head, node);
+		cfg::node n = this->convert_node(head, node);
+		g[head] = n;
 
 		cfg::vertex_descriptor new_head = add_vertex(g);
 		add_edge(head, new_head, g);
@@ -479,88 +416,27 @@ struct context
 		BOOST_ASSERT(!ctx.empty());
 		for (std::size_t i = ctx.back().size(); i != 0; --i)
 		{
-			auto_object_iterator const & reg_it = ctx.back()[i-1];
-			this->unregister_destructible_var(head, reg_it);
+			context_node const & reg_it = ctx.back()[i-1];
+
+			var_regrec const & reg = m_context_registry.get<var_regrec>(m_context_registry.context(reg_it));
+			this->register_decl_ref(reg.destr);
+			cfg::vertex_descriptor call_node = this->add_node(head, enode(cfg::nt_call)
+				(eot_func, this->get_name(reg.destr))
+				(reg.varptr));
+
+			m_context_registry.remove(reg_it);
+
+			this->connect_to_term(call_node);
+			if (!llvm::cast<clang::FunctionProtoType>(reg.destr->getType()->getUnqualifiedDesugaredType())->hasEmptyExceptionSpec())
+				this->connect_to_exc(call_node, eop(eot_node, call_node));
 		}
 		ctx.pop_back();
 	}
 
-	void generate_destructor_chain(cfg::vertex_descriptor & head, auto_object_iterator new_end)
+	context_node register_destructible_var(clang::CXXDestructorDecl const * destructor, eop const & varptr)
 	{
-		BOOST_ASSERT(new_end != m_auto_objects.begin());
-
-		for (auto_object_iterator it = m_auto_objects.end(); it != new_end; --it)
-		{
-			auto_var_registration const & reg = *boost::prior(it);
-
-			// This may be an empty registration injected by try statement
-			if (!reg.destr)
-				continue;
-
-			cfg::vertex_descriptor node = this->add_node(head, enode(cfg::nt_call)
-				(eot_func, this->get_name(reg.destr))
-				(reg.varptr));
-			this->connect_to_exc(node, boost::prior(boost::prior(it))->excnode);
-			this->connect_to_term(node);
-		}
-	}
-
-	void init_auto_reg_node(auto_var_registration const & reg)
-	{
-		cfg::node & n = g[reg.excnode];
-		n.type = cfg::nt_call;
-		n.ops.push_back(cfg::operand(cfg::ot_func, this->get_name(reg.destr)));
-		n.ops.push_back(this->make_rvalue(reg.varptr));
-
-		this->connect_to_exc(reg.excnode, m_term_exit_node);
-		this->connect_to_term(reg.excnode);
-	}
-
-	auto_object_iterator register_destructible_var(clang::CXXDestructorDecl const * destructor, eop const & varptr)
-	{
-		auto_var_registration reg = { destructor, varptr, add_vertex(g) };
-		this->init_auto_reg_node(reg);
-
-		add_edge(reg.excnode, m_auto_objects.back().excnode, g);
-		m_auto_objects.push_back(reg);
-		return boost::prior(m_auto_objects.end());
-	}
-
-	void unregister_destructible_var(cfg::vertex_descriptor & head, auto_object_iterator obj)
-	{
-		for (std::list<auto_var_registration>::iterator it = boost::prior(m_auto_objects.end()); it != obj; --it)
-		{
-			if (in_degree(it->excnode, g) == 0)
-			{
-				clear_vertex(it->excnode, g);
-				remove_vertex(it->excnode, g);
-			}
-
-			it->excnode = add_vertex(g);
-			this->init_auto_reg_node(*it);
-		}
-
-		auto_var_registration reg = *obj;
-		if (in_degree(obj->excnode, g) == 0)
-		{
-			clear_vertex(obj->excnode, g);
-			remove_vertex(obj->excnode, g);
-		}
-		obj = m_auto_objects.erase(obj);
-
-		for (; obj != m_auto_objects.end(); ++obj)
-		{
-			if (obj == m_auto_objects.begin())
-				add_edge(obj->excnode, m_exc_exit_node, g);
-			else
-				add_edge(obj->excnode, boost::prior(obj)->excnode, g);
-		}
-
-		this->register_decl_ref(reg.destr);
-
-		cfg::vertex_descriptor call_node = this->add_node(head, enode(cfg::nt_call)(eot_func, this->get_name(reg.destr))(reg.varptr));
-		this->connect_to_term(call_node);
-		this->connect_to_exc(call_node);
+		var_regrec reg = { destructor, varptr };
+		return m_context_registry.add(reg);
 	}
 
 	void build_construct_expr(cfg::vertex_descriptor & head, eop const & varptr, clang::CXXConstructExpr const * e)
@@ -579,7 +455,9 @@ struct context
 
 		cfg::vertex_descriptor call_node = this->add_node(head, node);
 		this->connect_to_term(call_node);
-		this->connect_to_exc(call_node);
+
+		if (!llvm::cast<clang::FunctionProtoType>(e->getConstructor()->getType()->getUnqualifiedDesugaredType())->hasEmptyExceptionSpec())
+			this->connect_to_exc(call_node, eop(eot_node, call_node));
 	}
 
 	eop make_phi(cfg::vertex_descriptor & head, cfg::vertex_descriptor branch, eop headop, eop branchop, bool lvalue, clang::Expr const * data = 0)
@@ -892,7 +770,7 @@ struct context
 			this->connect_to_term(call_node);
 
 			if (!fntype->hasEmptyExceptionSpec())
-				this->connect_to_exc(call_node);
+				this->connect_to_exc(call_node, eop(eot_node, call_node));
 
 			if (result_op.type != eot_none)
 				return result_op;
@@ -969,7 +847,7 @@ struct context
 		{
 			// TODO: deal with extended lifetime of temporaries bound to a reference.
 			eop res = this->build_expr(head, e->getSubExpr());
-			auto_object_iterator reg = this->register_destructible_var(e->getTemporary()->getDestructor(), this->make_address(res));
+			context_node reg = this->register_destructible_var(e->getTemporary()->getDestructor(), this->make_address(res));
 			m_fullexpr_lifetimes.back().push_back(reg);
 			return res;
 		}
@@ -1060,7 +938,7 @@ struct context
 			this->init_object(head, exc_mem, e->getSubExpr()->getType(), e->getSubExpr(), false);
 			// TODO: handle exceptions from initialization
 
-			this->join_nodes(head, m_auto_objects.back().excnode);
+			m_exc_registry[m_context_registry.current_context()].push_back(jump_sentinel(head, exc_mem));
 			head = add_vertex(g);
 			return eop();
 		}
@@ -1310,7 +1188,7 @@ struct context
 		}
 		else if (clang::ReturnStmt const * s = llvm::dyn_cast<clang::ReturnStmt>(stmt))
 		{
-			cfg::operand val;
+			eop val;
 			if (s->getRetValue() != 0)
 			{
 				if (m_fn->getResultType()->isStructureOrClassType())
@@ -1321,35 +1199,25 @@ struct context
 				}
 				else
 				{
-					eop op = this->build_full_expr(head, s->getRetValue());
+					val = this->build_full_expr(head, s->getRetValue());
 					if (m_fn->getResultType()->isReferenceType())
-						op = this->make_address(op);
-					val = this->make_rvalue(head, op);
+						val = this->make_address(val);
 				}
 			}
 
-			this->generate_destructor_chain(head, boost::next(m_auto_objects.begin()));
-
-			g[head].type = cfg::nt_exit;
-			g[head].ops.push_back(cfg::operand(cfg::ot_const, sir_int_t(0)));
-			if (val.type != eot_none)
-				g[head].ops.push_back(val);
-			m_exit_nodes.insert(head);
-
+			m_return_registry[m_context_registry.current_context()].push_back(jump_sentinel(head, val));
 			head = add_vertex(g);
 		}
 		else if (clang::BreakStmt const * s = llvm::dyn_cast<clang::BreakStmt>(stmt))
 		{
-			BOOST_ASSERT(!m_break_sentinels.empty());
-			this->generate_destructor_chain(head, boost::next(m_break_sentinels.back().second));
-			this->join_nodes(head, m_break_sentinels.back().first);
+			BOOST_ASSERT(!m_break_registries.empty());
+			m_break_registries.back()[m_context_registry.current_context()].push_back(head);
 			head = add_vertex(g);
 		}
 		else if (clang::ContinueStmt const * s = llvm::dyn_cast<clang::ContinueStmt>(stmt))
 		{
-			BOOST_ASSERT(!m_continue_sentinels.empty());
-			this->generate_destructor_chain(head, boost::next(m_continue_sentinels.back().second));
-			this->join_nodes(head, m_continue_sentinels.back().first);
+			BOOST_ASSERT(!m_continue_registries.empty());
+			m_continue_registries.back()[m_context_registry.current_context()].push_back(head);
 			head = add_vertex(g);
 		}
 		else if (clang::IfStmt const * s = llvm::dyn_cast<clang::IfStmt>(stmt))
@@ -1371,23 +1239,25 @@ struct context
 			cfg::vertex_descriptor body_head = this->duplicate_vertex(head);
 			this->set_cond(head, 0, sir_int_t(0));
 
-			m_break_sentinels.push_back(this->create_jump_sentinel());
-			m_continue_sentinels.push_back(this->create_jump_sentinel());
+			execution_context outer_ec = m_context_registry.current_context();
+
+			m_break_registries.push_back(jump_registry());
+			m_continue_registries.push_back(jump_registry());
 
 			this->build_stmt(body_head, s->getBody());
 			this->join_nodes(body_head, cond_start);
 
-			this->join_jump_sentinel(m_break_sentinels.back(), head);
-			this->join_jump_sentinel(m_continue_sentinels.back(), cond_start);
-			m_break_sentinels.pop_back();
-			m_continue_sentinels.pop_back();
+			this->join_jump_registry(m_break_registries, outer_ec, head);
+			this->join_jump_registry(m_continue_registries, outer_ec, cond_start);
 		}
 		else if (clang::DoStmt const * s = llvm::dyn_cast<clang::DoStmt>(stmt))
 		{
 			cfg::vertex_descriptor start_node = head;
 
-			m_break_sentinels.push_back(this->create_jump_sentinel());
-			m_continue_sentinels.push_back(this->create_jump_sentinel());
+			execution_context outer_ec = m_context_registry.current_context();
+
+			m_break_registries.push_back(jump_registry());
+			m_continue_registries.push_back(jump_registry());
 
 			this->build_stmt(head, s->getBody());
 
@@ -1397,15 +1267,16 @@ struct context
 
 			this->join_nodes(loop_node, start_node);
 
-			this->join_jump_sentinel(m_break_sentinels.back(), head);
-			this->join_jump_sentinel(m_continue_sentinels.back(), cond_node);
-			m_break_sentinels.pop_back();
-			m_continue_sentinels.pop_back();
+			this->join_jump_registry(m_break_registries, outer_ec, head);
+			this->join_jump_registry(m_continue_registries, outer_ec, cond_node);
 		}
 		else if (clang::ForStmt const * s = llvm::dyn_cast<clang::ForStmt>(stmt))
 		{
+			// TODO: a virtual block scope should enclose the for loop
 			if (s->getInit())
 				this->build_stmt(head, s->getInit());
+
+			execution_context outer_ec = m_context_registry.current_context();
 
 			cfg::vertex_descriptor start_node = head;
 			cfg::vertex_descriptor cond_node = head;
@@ -1419,21 +1290,19 @@ struct context
 			else
 				exit_node = add_vertex(g);
 
-			m_break_sentinels.push_back(this->create_jump_sentinel());
-			m_continue_sentinels.push_back(this->create_jump_sentinel());
+			m_break_registries.push_back(jump_registry());
+			m_continue_registries.push_back(jump_registry());
 
 			cfg::vertex_descriptor body_node = head;
 			this->build_stmt(head, s->getBody());
-			this->join_jump_sentinel(m_continue_sentinels.back(), head);
-			m_continue_sentinels.pop_back();
+			this->join_jump_registry(m_continue_registries, outer_ec, head);
 
 			if (s->getInc())
 				this->build_full_expr(head, s->getInc());
 			this->join_nodes(head, start_node);
 			head = exit_node;
 
-			this->join_jump_sentinel(m_break_sentinels.back(), exit_node);
-			m_break_sentinels.pop_back();
+			this->join_jump_registry(m_break_registries, outer_ec, exit_node);
 		}
 		else if (clang::DefaultStmt const * s = llvm::dyn_cast<clang::DefaultStmt>(stmt))
 		{
@@ -1459,12 +1328,13 @@ struct context
 			cfg::vertex_descriptor body_start = add_vertex(g);
 			head = body_start;
 
+			execution_context outer_ec = m_context_registry.current_context();
+
 			m_case_contexts.push_back(case_context_t());
-			m_break_sentinels.push_back(this->create_jump_sentinel());
+			m_break_registries.push_back(jump_registry());
 			this->build_stmt(head, s->getBody());
 
-			this->join_jump_sentinel(m_break_sentinels.back(), head);
-			m_break_sentinels.pop_back();
+			this->join_jump_registry(m_break_registries, outer_ec, head);
 
 			case_context_t const & case_ctx = m_case_contexts.back();
 			if (case_ctx.first != cfg::null_vertex())
@@ -1507,7 +1377,10 @@ struct context
 		}
 		else if (clang::CXXTryStmt const * s = llvm::dyn_cast<clang::CXXTryStmt>(stmt))
 		{
-			eop exc_object(eot_varptr, "e:"); // TODO: look at this when implementing exception object passing.
+			// FIXME: readd support for catch blocks
+			this->build_stmt(head, s->getTryBlock());
+
+			/*eop exc_object(eot_varptr, "e:"); // TODO: look at this when implementing exception object passing.
 
 			std::vector<cfg::vertex_descriptor> handled_heads;
 
@@ -1578,14 +1451,14 @@ struct context
 			// Register our top-level match node
 			auto_var_registration reg = { 0, eop(), handler_begin };
 			m_auto_objects.push_back(reg);
-			auto_object_iterator regiter = boost::prior(m_auto_objects.end());
+			context_node regiter = boost::prior(m_auto_objects.end());
 			
 			this->build_stmt(head, s->getTryBlock());
 
 			BOOST_ASSERT(!m_auto_objects.empty() && regiter == boost::prior(m_auto_objects.end()));
 			m_auto_objects.pop_back();
 
-			this->join_nodes(handled_heads[0], head);
+			this->join_nodes(handled_heads[0], head);*/
 		}
 		else if (clang::LabelStmt const * s = llvm::dyn_cast<clang::LabelStmt>(stmt))
 		{
@@ -1631,107 +1504,164 @@ struct context
 				this->attach_range_tag(n, m_fn->getBodyRBrace());
 		}
 	}
+
+	struct return_path_generator
+		: boost::static_visitor<cfg::vertex_descriptor>
+	{
+		return_path_generator(context & ctx, execution_context ec, cfg::vertex_descriptor v)
+			: ctx(ctx), ec(ec), v(v)
+		{
+		}
+
+		cfg::vertex_descriptor operator()(var_regrec const & reg)
+		{
+			cfg::vertex_descriptor node = ctx.add_node(v, enode(cfg::nt_call)
+				(eot_func, ctx.get_name(reg.destr))
+				(reg.varptr));
+			if (!llvm::cast<clang::FunctionProtoType>(reg.destr->getType()->getUnqualifiedDesugaredType())->hasEmptyExceptionSpec())
+				ctx.connect_to_exc(node, eop(eot_node, node), ec);
+			ctx.connect_to_term(node);
+			return v;
+		}
+
+		template <typename T>
+		cfg::vertex_descriptor operator()(T const & t)
+		{
+			return v;
+		}
+
+		context & ctx;
+		execution_context ec;
+		cfg::vertex_descriptor v;
+	};
+
+	struct exception_path_generator
+		: boost::static_visitor<cfg::vertex_descriptor>
+	{
+		exception_path_generator(context & ctx, execution_context /*ec*/, cfg::vertex_descriptor v)
+			: ctx(ctx), v(v)
+		{
+		}
+
+		cfg::vertex_descriptor operator()(var_regrec const & reg)
+		{
+			cfg::vertex_descriptor node = ctx.add_node(v, enode(cfg::nt_call)
+				(eot_func, ctx.get_name(reg.destr))
+				(reg.varptr));
+			ctx.connect_to_term(node);
+			return v;
+		}
+
+		template <typename T>
+		cfg::vertex_descriptor operator()(T const & t)
+		{
+			return v;
+		}
+
+		context & ctx;
+		cfg::vertex_descriptor v;
+	};
+
+	template <typename Generator>
+	jump_sentinel generate_oob_paths(jump_registry & registry, execution_context last_ctx)
+	{
+		if (registry.empty())
+			return jump_sentinel(g.null_vertex(), eop());
+
+		for (jump_registry::reverse_iterator it = registry.rbegin(); it != registry.rend() && it->first != last_ctx; ++it)
+		{
+			BOOST_ASSERT(it->first >= last_ctx);
+
+			jump_sentinel s = this->join_jump_sentinels(it->second);
+
+			Generator g(*this, m_context_registry.parent(it->first), s.sentinel);
+			s.sentinel = m_context_registry.value(it->first).apply_visitor(g);
+
+			registry[m_context_registry.parent(it->first)].push_back(s);
+		}
+
+		BOOST_ASSERT(registry.begin()->first == last_ctx);
+		BOOST_ASSERT(!registry.begin()->second.empty());
+
+		return this->join_jump_sentinels(registry.begin()->second);
+	}
+
+	jump_sentinel generate_return_paths(jump_registry & registry, execution_context last_ctx)
+	{
+		return this->generate_oob_paths<return_path_generator>(registry, last_ctx);
+	}
+
+	jump_sentinel generate_exception_paths(jump_registry & registry, execution_context last_ctx)
+	{
+		return this->generate_oob_paths<exception_path_generator>(registry, last_ctx);
+	}
+
+	jump_sentinel join_jump_sentinels(std::vector<jump_sentinel> & sentinels)
+	{
+		BOOST_ASSERT(!sentinels.empty());
+
+		if (sentinels.size() == 1)
+			return sentinels[0];
+
+		if (sentinels[0].value.type == eot_none)
+		{
+			for (std::size_t i = 1; i < sentinels.size(); ++i)
+				this->join_nodes(sentinels[i].sentinel, sentinels[0].sentinel);
+
+			return jump_sentinel(sentinels[0].sentinel, eop());
+		}
+
+		enode phi_node(cfg::nt_phi);
+		phi_node(eot_node, this->make_node(sentinels[0].sentinel, sentinels[0].value));
+		for (std::size_t i = 1; i < sentinels.size(); ++i)
+		{
+			phi_node(eot_node, this->make_node(sentinels[i].sentinel, sentinels[i].value));
+			this->join_nodes(sentinels[i].sentinel, sentinels[0].sentinel);
+		}
+
+		eop res(eot_node, this->add_node(sentinels[0].sentinel, phi_node));
+		return jump_sentinel(sentinels[0].sentinel, res);
+	}
 	
 	void finish()
 	{
 		this->backpatch_gotos();
 
-		if (in_degree(m_exc_exit_node, g) == 0)
-			remove_vertex(m_exc_exit_node, g);
-
 		if (in_degree(m_term_exit_node, g) == 0)
 			remove_vertex(m_term_exit_node, g);
 
-		g[m_head].type = cfg::nt_exit;
-		g[m_head].ops.push_back(cfg::operand(cfg::ot_const, sir_int_t(0)));
-		m_exit_nodes.insert(m_head);
-
-		for (std::size_t exit_index = 0; exit_index != 1; ++exit_index)
+		// Generate return paths. The current head forms a default return path.
 		{
-			std::size_t value_node_count = 0;
+			jump_sentinel exit_sentinel = this->generate_return_paths(m_return_registry, 0);
 
-			std::vector<cfg::vertex_descriptor> exit_nodes;
-			for (std::set<cfg::vertex_descriptor>::const_iterator it = m_exit_nodes.begin(); it != m_exit_nodes.end(); ++it)
+			cfg::node exit_node(cfg::nt_exit);
+			exit_node.ops.push_back(cfg::operand(cfg::ot_const, sir_int_t(0)));
+			if (exit_sentinel.value.type != eot_none)
 			{
-				BOOST_ASSERT(g[*it].type == cfg::nt_exit);
-				BOOST_ASSERT(g[*it].ops.size() == 1 || g[*it].ops.size() == 2);
-				BOOST_ASSERT(g[*it].ops[0].type == cfg::ot_const);
-
-				std::size_t idx = boost::get<sir_int_t>(boost::get<constant>(g[*it].ops[0].id));
-				if (idx == exit_index)
-				{
-					exit_nodes.push_back(*it);
-					if (g[*it].ops.size() == 2)
-						++value_node_count;
-				}
-			}
-
-			if (value_node_count > 0)
-			{
-				for (std::size_t i = exit_nodes.size(); i != 0; --i)
-				{
-					if (g[exit_nodes[i-1]].ops.size() == 1)
-					{
-						using std::swap;
-						swap(exit_nodes[i-1], exit_nodes.back());
-						m_exit_nodes.erase(exit_nodes.back());
-						this->join_nodes(exit_nodes.back(), m_term_exit_node);
-						exit_nodes.pop_back();
-					}
-				}
-			}
-
-			if (exit_nodes.size() < 2)
-				continue;
-
-			if (value_node_count < 2)
-			{
-				for (std::size_t i = 1; i != exit_nodes.size(); ++i)
-				{
-					g.redirect_vertex(exit_nodes[i], exit_nodes[0]);
-					m_exit_nodes.erase(exit_nodes[1]);
-					remove_vertex(exit_nodes[i], g);
-				}
+				BOOST_ASSERT(exit_sentinel.sentinel != g.null_vertex());
+				exit_node.ops.push_back(this->make_rvalue(exit_sentinel.sentinel, exit_sentinel.value));
+				clear_vertex(m_head, g);
+				remove_vertex(m_head, g);
 			}
 			else
 			{
-				cfg::vertex_descriptor phi_node = add_vertex(g);
-				g[phi_node].type = cfg::nt_phi;
-
-				cfg::vertex_descriptor new_exit_node = add_vertex(g);
-				g[new_exit_node].type = cfg::nt_exit;
-				g[new_exit_node].ops.push_back(cfg::operand(cfg::ot_const, sir_int_t(exit_index)));
-				g[new_exit_node].ops.push_back(cfg::operand(cfg::ot_node, phi_node));
-
-				add_edge(phi_node, new_exit_node, g);
-
-				for (std::size_t i = 0; i != exit_nodes.size(); ++i)
-				{
-					m_exit_nodes.erase(exit_nodes[i]);
-
-					if (g[exit_nodes[i]].ops.size() == 2)
-					{
-						if (g[exit_nodes[i]].ops[1].type == cfg::ot_node)
-						{
-							g[phi_node].ops.push_back(g[exit_nodes[i]].ops[1]);
-							g.redirect_vertex(exit_nodes[i], phi_node);
-							remove_vertex(exit_nodes[i], g);
-						}
-						else
-						{
-							g[exit_nodes[i]].type = cfg::nt_value;
-							g[exit_nodes[i]].ops.erase(g[exit_nodes[i]].ops.begin());
-							add_edge(exit_nodes[i], phi_node, g);
-							g[phi_node].ops.push_back(cfg::operand(cfg::ot_node, exit_nodes[i]));
-						}
-					}
-					else
-					{
-						BOOST_ASSERT(in_degree(exit_nodes[i], g) == 0);
-						remove_vertex(exit_nodes[i], g);
-					}
-				}
+				if (exit_sentinel.sentinel != g.null_vertex())
+					this->join_nodes(m_head, exit_sentinel.sentinel);
+				else
+					exit_sentinel.sentinel = m_head;
 			}
+			g[exit_sentinel.sentinel] = exit_node;
+		}
+
+		jump_sentinel exc_sentinel = this->generate_exception_paths(m_exc_registry, 0);
+		if (exc_sentinel.value.type != eot_none)
+		{
+			BOOST_ASSERT(exc_sentinel.sentinel != g.null_vertex());
+
+			cfg::node exc_node(cfg::nt_exit);
+			exc_node.ops.push_back(cfg::operand(cfg::ot_const, sir_int_t(1)));
+			exc_node.ops.push_back(this->make_rvalue(exc_sentinel.sentinel, exc_sentinel.value));
+			g[exc_sentinel.sentinel] = exc_node;
 		}
 
 		this->simplify();

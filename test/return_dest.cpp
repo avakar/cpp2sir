@@ -1,6 +1,7 @@
 struct s
 {
-    ~s();
+    s() throw();
+    ~s() throw();
 };
 
 int f1()
