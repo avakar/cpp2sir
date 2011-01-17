@@ -46,12 +46,9 @@ struct context
 	context(program & p, cfg & c, name_mangler & nm, clang::FunctionDecl const * fn, clang::SourceManager const & sm,
 		filename_store & fnames, detail::build_cfg_visitor_base & visitor, std::string const & static_prefix)
 		: m_program(p), m_name_mangler(nm), m_static_prefix(static_prefix), m_sm(sm), m_fnames(fnames), m_visitor(visitor), g(c), m_fn(fn),
-		m_head(add_vertex(g)), m_term_exit_node(add_vertex(g))
+		m_head(add_vertex(g))
 	{
 		g.entry(m_head);
-
-		g[m_term_exit_node].type = cfg::nt_exit;
-		g[m_term_exit_node].ops.push_back(cfg::operand(cfg::ot_const, sir_int_t(2)));
 
 		this->build();
 	}
@@ -81,7 +78,6 @@ struct context
 	std::vector<clang::Type const *> m_temporaries;
 
 	cfg::vertex_descriptor m_head;
-	cfg::vertex_descriptor m_term_exit_node;
 
 	jump_registry m_exc_registry;
 	jump_registry m_return_registry;
@@ -103,12 +99,6 @@ struct context
 		this->join_nodes(s.sentinel, target);
 		registries.pop_back();
 		return s.value;
-	}
-
-	void connect_to_term(cfg::vertex_descriptor v)
-	{
-		cfg::edge_descriptor e = add_edge(v, m_term_exit_node, g).first;
-		g[e].id = 2;
 	}
 
 	void connect_to_exc(cfg::vertex_descriptor v, execution_context ctx)
@@ -426,7 +416,6 @@ struct context
 
 			m_context_registry.remove(reg_it);
 
-			this->connect_to_term(call_node);
 			if (!llvm::cast<clang::FunctionProtoType>(reg.destr->getType()->getUnqualifiedDesugaredType())->hasEmptyExceptionSpec())
 				this->connect_to_exc(call_node);
 		}
@@ -454,7 +443,6 @@ struct context
 			node(this->make_param(head, this->build_expr(head, e->getArg(i)), fntype->getArgType(i).getTypePtr()));
 
 		cfg::vertex_descriptor call_node = this->add_node(head, node);
-		this->connect_to_term(call_node);
 
 		if (!llvm::cast<clang::FunctionProtoType>(e->getConstructor()->getType()->getUnqualifiedDesugaredType())->hasEmptyExceptionSpec())
 			this->connect_to_exc(call_node);
@@ -767,7 +755,6 @@ struct context
 				node(this->make_param(head, params[i], param_types[i]));
 
 			cfg::vertex_descriptor call_node = this->add_node(head, node);
-			this->connect_to_term(call_node);
 
 			if (!fntype->hasEmptyExceptionSpec())
 				this->connect_to_exc(call_node);
@@ -1533,7 +1520,6 @@ struct context
 				(reg.varptr));
 			if (!llvm::cast<clang::FunctionProtoType>(reg.destr->getType()->getUnqualifiedDesugaredType())->hasEmptyExceptionSpec())
 				ctx.connect_to_exc(node, ec);
-			ctx.connect_to_term(node);
 			return s;
 		}
 
@@ -1561,7 +1547,6 @@ struct context
 			cfg::vertex_descriptor node = ctx.add_node(s.sentinel, enode(cfg::nt_call)
 				(eot_func, ctx.get_name(reg.destr))
 				(reg.varptr));
-			ctx.connect_to_term(node);
 			return s;
 		}
 
@@ -1647,9 +1632,6 @@ struct context
 	void finish()
 	{
 		this->backpatch_gotos();
-
-		if (in_degree(m_term_exit_node, g) == 0)
-			remove_vertex(m_term_exit_node, g);
 
 		// Generate return paths. The current head forms a default return path.
 		{
