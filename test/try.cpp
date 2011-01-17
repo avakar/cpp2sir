@@ -1,17 +1,32 @@
 struct s { s(); ~s(); };
 
 void e1();
-void e2(int);
-void e3();
+void e2(int) throw();
+void e3() throw();
+
+void f0()
+{
+}
 
 void f1()
 {
-    throw 1;
+    try
+    {
+    }
+    catch (int)
+    {
+    }
 }
 
 void f2()
 {
-    throw s();
+    try
+    {
+        e1();
+    }
+    catch (int e)
+    {
+    }
 }
 
 void f3()
@@ -20,17 +35,9 @@ void f3()
     {
         e1();
     }
-    /*catch (int & e)
+    catch (int & e)
     {
         e2(e);
-    }*/
-    catch (long)
-    {
-        e3();
-    }
-    catch (...)
-    {
-        e3();
     }
 }
 
@@ -38,11 +45,16 @@ int f4()
 {
     try
     {
-        return 42;
+        throw 42;
     }
-    catch (int e)
+    catch (long & e)
     {
+        e2(e);
     }
-    
+    catch (...)
+    {
+        e3();
+    }
+
     return 2;
 }
