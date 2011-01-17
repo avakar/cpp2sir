@@ -1377,15 +1377,12 @@ struct context
 		}
 		else if (clang::CXXTryStmt const * s = llvm::dyn_cast<clang::CXXTryStmt>(stmt))
 		{
-			// FIXME: readd support for catch blocks
-			this->build_stmt(head, s->getTryBlock());
+			BOOST_ASSERT(s->getNumHandlers() != 0);
 
-			/*eop exc_object(eot_varptr, "e:"); // TODO: look at this when implementing exception object passing.
+			cfg::vertex_descriptor handler_head = add_vertex(g);
+			except_regrec reg = { handler_head };
 
 			std::vector<cfg::vertex_descriptor> handled_heads;
-
-			cfg::vertex_descriptor handler_begin = add_vertex(g);
-			cfg::vertex_descriptor handler_head = handler_begin;
 			for (unsigned i = 0; i != s->getNumHandlers(); ++i)
 			{
 				clang::CXXCatchStmt const * handler = s->getHandler(i);
@@ -1393,8 +1390,9 @@ struct context
 				{
 					cfg::vertex_descriptor match_node = this->add_node(handler_head, enode(cfg::nt_call)
 						(eot_oper, "cpp_exc_match")
-						(exc_object)
+						(eop())
 						(eot_varptr, m_name_mangler.make_rtti_name(handler->getCaughtType(), m_static_prefix)));
+					reg.add(match_node, 1);
 
 					cfg::vertex_descriptor false_head = this->duplicate_vertex(handler_head);
 					this->set_cond(false_head, 0, sir_int_t(0));
@@ -1433,32 +1431,28 @@ struct context
 				}
 			}
 
-			this->join_nodes(handler_head, m_auto_objects.back().excnode);
+			reg.throw_node = handler_head;
 
 			BOOST_ASSERT(!handled_heads.empty());
 			for (std::size_t i = 1; i < handled_heads.size(); ++i)
 				this->join_nodes(handled_heads[i], handled_heads[0]);
 
 			// Destroy the exception object.
-			this->add_node(handled_heads[0], enode(cfg::nt_call)
+			cfg::vertex_descriptor v = this->add_node(handled_heads[0], enode(cfg::nt_call)
 				(eot_oper, "cpp_exc_destroy")
-				(exc_object));
+				(eop()));
+			reg.add(v, 1);
 
-			this->add_node(handled_heads[0], enode(cfg::nt_call)
+			v = this->add_node(handled_heads[0], enode(cfg::nt_call)
 				(eot_oper, "cpp_exc_free")
-				(exc_object));
+				(eop()));
+			reg.add(v, 1);
 
-			// Register our top-level match node
-			auto_var_registration reg = { 0, eop(), handler_begin };
-			m_auto_objects.push_back(reg);
-			context_node regiter = boost::prior(m_auto_objects.end());
-			
+			context_node n = m_context_registry.add(reg);
 			this->build_stmt(head, s->getTryBlock());
+			m_context_registry.remove(n);
 
-			BOOST_ASSERT(!m_auto_objects.empty() && regiter == boost::prior(m_auto_objects.end()));
-			m_auto_objects.pop_back();
-
-			this->join_nodes(handled_heads[0], head);*/
+			this->join_nodes(handled_heads[0], head);
 		}
 		else if (clang::LabelStmt const * s = llvm::dyn_cast<clang::LabelStmt>(stmt))
 		{
@@ -1506,60 +1500,71 @@ struct context
 	}
 
 	struct return_path_generator
-		: boost::static_visitor<cfg::vertex_descriptor>
+		: boost::static_visitor<jump_sentinel>
 	{
-		return_path_generator(context & ctx, execution_context ec, cfg::vertex_descriptor v)
-			: ctx(ctx), ec(ec), v(v)
+		return_path_generator(context & ctx, execution_context ec, jump_sentinel const & s)
+			: ctx(ctx), ec(ec), s(s)
 		{
 		}
 
-		cfg::vertex_descriptor operator()(var_regrec const & reg)
+		jump_sentinel operator()(var_regrec const & reg)
 		{
-			cfg::vertex_descriptor node = ctx.add_node(v, enode(cfg::nt_call)
+			cfg::vertex_descriptor node = ctx.add_node(s.sentinel, enode(cfg::nt_call)
 				(eot_func, ctx.get_name(reg.destr))
 				(reg.varptr));
 			if (!llvm::cast<clang::FunctionProtoType>(reg.destr->getType()->getUnqualifiedDesugaredType())->hasEmptyExceptionSpec())
 				ctx.connect_to_exc(node, eop(eot_node, node), ec);
 			ctx.connect_to_term(node);
-			return v;
+			return s;
 		}
 
 		template <typename T>
-		cfg::vertex_descriptor operator()(T const & t)
+		jump_sentinel operator()(T const & t)
 		{
-			return v;
+			return s;
 		}
 
 		context & ctx;
 		execution_context ec;
-		cfg::vertex_descriptor v;
+		jump_sentinel s;
 	};
 
 	struct exception_path_generator
-		: boost::static_visitor<cfg::vertex_descriptor>
+		: boost::static_visitor<jump_sentinel>
 	{
-		exception_path_generator(context & ctx, execution_context /*ec*/, cfg::vertex_descriptor v)
-			: ctx(ctx), v(v)
+		exception_path_generator(context & ctx, execution_context ec, jump_sentinel const & s)
+			: ctx(ctx), ec(ec), s(s)
 		{
 		}
 
-		cfg::vertex_descriptor operator()(var_regrec const & reg)
+		jump_sentinel operator()(var_regrec const & reg)
 		{
-			cfg::vertex_descriptor node = ctx.add_node(v, enode(cfg::nt_call)
+			cfg::vertex_descriptor node = ctx.add_node(s.sentinel, enode(cfg::nt_call)
 				(eot_func, ctx.get_name(reg.destr))
 				(reg.varptr));
 			ctx.connect_to_term(node);
-			return v;
+			return s;
+		}
+
+		jump_sentinel operator()(except_regrec const & reg)
+		{
+			cfg::operand op = ctx.make_rvalue(s.sentinel, s.value);
+			ctx.join_nodes(s.sentinel, reg.entry_node);
+			ctx.m_exc_registry[ec].push_back(jump_sentinel(reg.throw_node, s.value));
+			for (std::size_t i = 0; i < reg.backpatch_entries.size(); ++i)
+				ctx.g[reg.backpatch_entries[i].v].ops[reg.backpatch_entries[i].op_index] = op;
+			return jump_sentinel(ctx.g.null_vertex(), eop());
 		}
 
 		template <typename T>
-		cfg::vertex_descriptor operator()(T const & t)
+		jump_sentinel operator()(T const & t)
 		{
-			return v;
+			return s;
 		}
 
 		context & ctx;
-		cfg::vertex_descriptor v;
+		execution_context ec;
+		jump_sentinel s;
 	};
 
 	template <typename Generator>
@@ -1574,10 +1579,11 @@ struct context
 
 			jump_sentinel s = this->join_jump_sentinels(it->second);
 
-			Generator g(*this, m_context_registry.parent(it->first), s.sentinel);
-			s.sentinel = m_context_registry.value(it->first).apply_visitor(g);
+			Generator g(*this, m_context_registry.parent(it->first), s);
+			s = m_context_registry.value(it->first).apply_visitor(g);
 
-			registry[m_context_registry.parent(it->first)].push_back(s);
+			if (s.sentinel != this->g.null_vertex())
+				registry[m_context_registry.parent(it->first)].push_back(s);
 		}
 
 		BOOST_ASSERT(registry.begin()->first == last_ctx);
