@@ -1,7 +1,8 @@
 struct s
 {
-    s() {}
-    ~s() {}
+    s();
+    s(s const &);
+    ~s();
 };
 
 void f0()

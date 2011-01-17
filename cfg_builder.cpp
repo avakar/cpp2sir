@@ -111,17 +111,17 @@ struct context
 		g[e].id = 2;
 	}
 
-	void connect_to_exc(cfg::vertex_descriptor v, eop value, execution_context ctx)
+	void connect_to_exc(cfg::vertex_descriptor v, execution_context ctx)
 	{
 		cfg::vertex_descriptor sentinel = add_vertex(g);
 		cfg::edge_descriptor e = add_edge(v, sentinel, g).first;
 		g[e].id = 1;
-		m_exc_registry[ctx].push_back(jump_sentinel(sentinel, value));
+		m_exc_registry[ctx].push_back(sentinel);
 	}
 
-	void connect_to_exc(cfg::vertex_descriptor v, eop value)
+	void connect_to_exc(cfg::vertex_descriptor v)
 	{
-		this->connect_to_exc(v, value, m_context_registry.current_context());
+		this->connect_to_exc(v, m_context_registry.current_context());
 	}
 
 	cfg::vertex_descriptor duplicate_vertex(cfg::vertex_descriptor src)
@@ -428,7 +428,7 @@ struct context
 
 			this->connect_to_term(call_node);
 			if (!llvm::cast<clang::FunctionProtoType>(reg.destr->getType()->getUnqualifiedDesugaredType())->hasEmptyExceptionSpec())
-				this->connect_to_exc(call_node, eop(eot_node, call_node));
+				this->connect_to_exc(call_node);
 		}
 		ctx.pop_back();
 	}
@@ -457,7 +457,7 @@ struct context
 		this->connect_to_term(call_node);
 
 		if (!llvm::cast<clang::FunctionProtoType>(e->getConstructor()->getType()->getUnqualifiedDesugaredType())->hasEmptyExceptionSpec())
-			this->connect_to_exc(call_node, eop(eot_node, call_node));
+			this->connect_to_exc(call_node);
 	}
 
 	eop make_phi(cfg::vertex_descriptor & head, cfg::vertex_descriptor branch, eop headop, eop branchop, bool lvalue, clang::Expr const * data = 0)
@@ -770,7 +770,7 @@ struct context
 			this->connect_to_term(call_node);
 
 			if (!fntype->hasEmptyExceptionSpec())
-				this->connect_to_exc(call_node, eop(eot_node, call_node));
+				this->connect_to_exc(call_node);
 
 			if (result_op.type != eot_none)
 				return result_op;
@@ -935,10 +935,30 @@ struct context
 				(eot_oper, "cpp_exc_alloc")
 				(eot_varptr, m_name_mangler.make_rtti_name(e->getType().getUnqualifiedType(), m_static_prefix))));
 
-			this->init_object(head, exc_mem, e->getSubExpr()->getType(), e->getSubExpr(), false);
-			// TODO: handle exceptions from initialization
+			if (e->getSubExpr())
+			{
+				this->init_object(head, exc_mem, e->getSubExpr()->getType(), e->getSubExpr(), false);
+				// TODO: handle exceptions from initialization (i.e. free the exception object).
 
-			m_exc_registry[m_context_registry.current_context()].push_back(jump_sentinel(head, exc_mem));
+				// Throw the exception object. The throwing will fail if there is an another uncaught exception.
+				this->add_node(head, enode(cfg::nt_call)
+					(eot_oper, "cpp_exc_throw")
+					(exc_mem));
+			}
+			else
+			{
+				// Retrieve the current exception object.
+				cfg::vertex_descriptor exc_object = this->add_node(head, enode(cfg::nt_call)
+					(eot_oper, "cpp_exc_current"));
+
+				// Rethrow it. The object must currently be unthrown.
+				// Note that making the exception object thrown will prevent it from being freed.
+				this->add_node(head, enode(cfg::nt_call)
+					(eot_oper, "cpp_exc_throw")
+					(eot_node, exc_object));
+			}
+
+			m_exc_registry[m_context_registry.current_context()].push_back(head);
 			head = add_vertex(g);
 			return eop();
 		}
@@ -1382,17 +1402,21 @@ struct context
 			cfg::vertex_descriptor handler_head = add_vertex(g);
 			except_regrec reg = { handler_head };
 
+			eop exc_object = eop(eot_node, this->add_node(handler_head, enode(cfg::nt_call)
+				(eot_oper, "cpp_exc_current")));
+
 			std::vector<cfg::vertex_descriptor> handled_heads;
 			for (unsigned i = 0; i != s->getNumHandlers(); ++i)
 			{
 				clang::CXXCatchStmt const * handler = s->getHandler(i);
 				if (handler->getExceptionDecl())
 				{
+					// Attempt to match the exception object to the handler.
+					// If the matching succeeds, the exception is marked as caught.
 					cfg::vertex_descriptor match_node = this->add_node(handler_head, enode(cfg::nt_call)
-						(eot_oper, "cpp_exc_match")
-						(eop())
+						(eot_oper, "cpp_exc_catch")
+						(exc_object)
 						(eot_varptr, m_name_mangler.make_rtti_name(handler->getCaughtType(), m_static_prefix)));
-					reg.add(match_node, 1);
 
 					cfg::vertex_descriptor false_head = this->duplicate_vertex(handler_head);
 					this->set_cond(false_head, 0, sir_int_t(0));
@@ -1431,22 +1455,17 @@ struct context
 				}
 			}
 
-			reg.throw_node = handler_head;
+			m_exc_registry[m_context_registry.current_context()].push_back(handler_head);
 
 			BOOST_ASSERT(!handled_heads.empty());
 			for (std::size_t i = 1; i < handled_heads.size(); ++i)
 				this->join_nodes(handled_heads[i], handled_heads[0]);
 
-			// Destroy the exception object.
+			// Release the exception object. Note that uncaught object will not be released
+			// so that rethrow is possible.
 			cfg::vertex_descriptor v = this->add_node(handled_heads[0], enode(cfg::nt_call)
-				(eot_oper, "cpp_exc_destroy")
-				(eop()));
-			reg.add(v, 1);
-
-			v = this->add_node(handled_heads[0], enode(cfg::nt_call)
 				(eot_oper, "cpp_exc_free")
-				(eop()));
-			reg.add(v, 1);
+				(exc_object));
 
 			context_node n = m_context_registry.add(reg);
 			this->build_stmt(head, s->getTryBlock());
@@ -1513,7 +1532,7 @@ struct context
 				(eot_func, ctx.get_name(reg.destr))
 				(reg.varptr));
 			if (!llvm::cast<clang::FunctionProtoType>(reg.destr->getType()->getUnqualifiedDesugaredType())->hasEmptyExceptionSpec())
-				ctx.connect_to_exc(node, eop(eot_node, node), ec);
+				ctx.connect_to_exc(node, ec);
 			ctx.connect_to_term(node);
 			return s;
 		}
@@ -1548,11 +1567,7 @@ struct context
 
 		jump_sentinel operator()(except_regrec const & reg)
 		{
-			cfg::operand op = ctx.make_rvalue(s.sentinel, s.value);
 			ctx.join_nodes(s.sentinel, reg.entry_node);
-			ctx.m_exc_registry[ec].push_back(jump_sentinel(reg.throw_node, s.value));
-			for (std::size_t i = 0; i < reg.backpatch_entries.size(); ++i)
-				ctx.g[reg.backpatch_entries[i].v].ops[reg.backpatch_entries[i].op_index] = op;
 			return jump_sentinel(ctx.g.null_vertex(), eop());
 		}
 
@@ -1660,13 +1675,10 @@ struct context
 		}
 
 		jump_sentinel exc_sentinel = this->generate_exception_paths(m_exc_registry, 0);
-		if (exc_sentinel.value.type != eot_none)
+		if (exc_sentinel.sentinel != g.null_vertex())
 		{
-			BOOST_ASSERT(exc_sentinel.sentinel != g.null_vertex());
-
 			cfg::node exc_node(cfg::nt_exit);
 			exc_node.ops.push_back(cfg::operand(cfg::ot_const, sir_int_t(1)));
-			exc_node.ops.push_back(this->make_rvalue(exc_sentinel.sentinel, exc_sentinel.value));
 			g[exc_sentinel.sentinel] = exc_node;
 		}
 

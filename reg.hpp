@@ -72,21 +72,7 @@ struct enode
 
 struct except_regrec
 {
-	struct var_regrec_backpatch_entry
-	{
-		cfg::vertex_descriptor v;
-		std::size_t op_index;
-	};
-
 	cfg::vertex_descriptor entry_node;
-	cfg::vertex_descriptor throw_node;
-	std::vector<var_regrec_backpatch_entry> backpatch_entries;
-
-	void add(cfg::vertex_descriptor v, std::size_t op_index)
-	{
-		var_regrec_backpatch_entry entry = { v, op_index };
-		backpatch_entries.push_back(entry);
-	}
 };
 
 struct var_regrec
