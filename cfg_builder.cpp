@@ -918,14 +918,14 @@ struct context
 		}
 		else if (clang::CXXThrowExpr const * e = llvm::dyn_cast<clang::CXXThrowExpr>(expr))
 		{
-			eop exc_mem = eop(eot_node, this->add_node(head, enode(cfg::nt_call)
-				(eot_oper, "cpp_exc_alloc")
-				(eot_varptr, m_name_mangler.make_rtti_name(e->getType().getUnqualifiedType(), m_static_prefix))));
-
 			if (e->getSubExpr())
 			{
+				eop exc_mem = eop(eot_node, this->add_node(head, enode(cfg::nt_call)
+					(eot_oper, "cpp_exc_alloc")
+					(eot_varptr, m_name_mangler.make_rtti_name(e->getType().getUnqualifiedType(), m_static_prefix))));
+
 				this->init_object(head, exc_mem, e->getSubExpr()->getType(), e->getSubExpr(), false);
-				// TODO: handle exceptions from initialization (i.e. free the exception object).
+				// FIXME: handle exceptions from initialization (i.e. free the exception object).
 
 				// Throw the exception object. The throwing will fail if there is an another uncaught exception.
 				this->add_node(head, enode(cfg::nt_call)
@@ -1447,6 +1447,8 @@ struct context
 			BOOST_ASSERT(!handled_heads.empty());
 			for (std::size_t i = 1; i < handled_heads.size(); ++i)
 				this->join_nodes(handled_heads[i], handled_heads[0]);
+
+			// FIXME: Make the exception object even in the case of another exception.
 
 			// Release the exception object. Note that uncaught object will not be released
 			// so that rethrow is possible.
