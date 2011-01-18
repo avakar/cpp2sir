@@ -58,3 +58,17 @@ int f4()
 
     return 2;
 }
+
+int f5()
+{
+    try
+    {
+        throw 42;
+    }
+    catch (long &)
+    {
+        e1();
+    }
+
+    return 2;
+}

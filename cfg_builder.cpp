@@ -396,6 +396,15 @@ struct context
 		g[edge].cond = cond;
 	}
 
+	void cleanup_lifetime_node(cfg::vertex_descriptor & head, context_node n)
+	{
+		execution_context ec = m_context_registry.context(n);
+		m_context_registry.remove(n);
+
+		return_path_generator g(*this, m_context_registry.current_context(), head);
+		head = m_context_registry.value(ec).apply_visitor(g).sentinel;
+	}
+
 	void begin_lifetime_context(std::vector<lifetime_context_t> & ctx)
 	{
 		ctx.push_back(lifetime_context_t());
@@ -405,20 +414,7 @@ struct context
 	{
 		BOOST_ASSERT(!ctx.empty());
 		for (std::size_t i = ctx.back().size(); i != 0; --i)
-		{
-			context_node const & reg_it = ctx.back()[i-1];
-
-			var_regrec const & reg = m_context_registry.get<var_regrec>(m_context_registry.context(reg_it));
-			this->register_decl_ref(reg.destr);
-			cfg::vertex_descriptor call_node = this->add_node(head, enode(cfg::nt_call)
-				(eot_func, this->get_name(reg.destr))
-				(reg.varptr));
-
-			m_context_registry.remove(reg_it);
-
-			if (!llvm::cast<clang::FunctionProtoType>(reg.destr->getType()->getUnqualifiedDesugaredType())->hasEmptyExceptionSpec())
-				this->connect_to_exc(call_node);
-		}
+			this->cleanup_lifetime_node(head, ctx.back()[i-1]);
 		ctx.pop_back();
 	}
 
@@ -923,14 +919,19 @@ struct context
 				eop exc_mem = eop(eot_node, this->add_node(head, enode(cfg::nt_call)
 					(eot_oper, "cpp_exc_alloc")
 					(eot_varptr, m_name_mangler.make_rtti_name(e->getType().getUnqualifiedType(), m_static_prefix))));
+				
+				exc_object_regrec reg = { exc_mem };
+				context_node n = m_context_registry.add(reg);
 
 				this->init_object(head, exc_mem, e->getSubExpr()->getType(), e->getSubExpr(), false);
-				// FIXME: handle exceptions from initialization (i.e. free the exception object).
 
 				// Throw the exception object. The throwing will fail if there is an another uncaught exception.
 				this->add_node(head, enode(cfg::nt_call)
 					(eot_oper, "cpp_exc_throw")
 					(exc_mem));
+
+				m_context_registry.remove(n);
+				//this->cleanup_lifetime_node(head, n);
 			}
 			else
 			{
@@ -1408,6 +1409,9 @@ struct context
 					cfg::vertex_descriptor false_head = this->duplicate_vertex(handler_head);
 					this->set_cond(false_head, 0, sir_int_t(0));
 
+					exc_object_regrec reg = { exc_object };
+					context_node n = m_context_registry.add(reg);
+
 					clang::VarDecl const * var = handler->getExceptionDecl();
 					if (var->getIdentifier())
 					{
@@ -1433,12 +1437,19 @@ struct context
 					this->build_stmt(handler_head, handler->getHandlerBlock());
 					handled_heads.push_back(handler_head);
 					handler_head = false_head;
+
+					m_context_registry.remove(n);
 				}
 				else
 				{
+					exc_object_regrec reg = { exc_object };
+					context_node n = m_context_registry.add(reg);
+
 					this->build_stmt(handler_head, handler->getHandlerBlock());
 					handled_heads.push_back(handler_head);
 					handler_head = add_vertex(g);
+
+					m_context_registry.remove(n);
 				}
 			}
 
@@ -1447,8 +1458,6 @@ struct context
 			BOOST_ASSERT(!handled_heads.empty());
 			for (std::size_t i = 1; i < handled_heads.size(); ++i)
 				this->join_nodes(handled_heads[i], handled_heads[0]);
-
-			// FIXME: Make the exception object even in the case of another exception.
 
 			// Release the exception object. Note that uncaught object will not be released
 			// so that rethrow is possible.
@@ -1525,6 +1534,14 @@ struct context
 			return s;
 		}
 
+		jump_sentinel operator()(exc_object_regrec const & reg)
+		{
+			ctx.add_node(s.sentinel, enode(cfg::nt_call)
+				(eot_oper, "cpp_exc_free")
+				(reg.exc_obj_ptr));
+			return s;
+		}
+
 		template <typename T>
 		jump_sentinel operator()(T const & t)
 		{
@@ -1556,6 +1573,14 @@ struct context
 		{
 			ctx.join_nodes(s.sentinel, reg.entry_node);
 			return jump_sentinel(ctx.g.null_vertex(), eop());
+		}
+
+		jump_sentinel operator()(exc_object_regrec const & reg)
+		{
+			ctx.add_node(s.sentinel, enode(cfg::nt_call)
+				(eot_oper, "cpp_exc_free")
+				(reg.exc_obj_ptr));
+			return s;
 		}
 
 		template <typename T>

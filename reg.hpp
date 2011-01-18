@@ -81,7 +81,12 @@ struct var_regrec
 	eop varptr;
 };
 
-typedef boost::variant<boost::none_t, var_regrec, except_regrec> regrec;
+struct exc_object_regrec
+{
+	eop exc_obj_ptr;
+};
+
+typedef boost::variant<boost::none_t, var_regrec, except_regrec, exc_object_regrec> regrec;
 
 // A registration context is a chain of registration records. As the AST of a function body
 // is crawled and new declarations and try statements are encountered, the registration 

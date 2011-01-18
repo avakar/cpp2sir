@@ -18,10 +18,9 @@ void f4(int i)
     i? throw 3: throw 4;
 }
 
-/*struct s { s(); s(s const &); ~s(); };
+struct s { s(); s(s const &); ~s(); };
 
 void f5()
 {
     throw s();
 }
-*/
