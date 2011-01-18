@@ -4,24 +4,23 @@ project(cpp2sir)
 set(LLVM_INCLUDE_DIR "" CACHE PATH "The location of LLVM and clang include files.")
 set(LLVM_LIB_DIR "" CACHE PATH "The location of LLVM and clang library files.")
 
-include_directories(${LLVM_INCLUDE_DIR})
-link_directories(${LLVM_LIB_DIR})
-
 set(CLANG_LIBS
+    clangFrontend
+    clangDriver
+
+    clangParse
+
+    clangLex
+    clangSema
+    clangSerialization
+    clangAnalysis
+    clangIndex
+    clangAST
+    clangBasic
+
     LLVMCore
     LLVMSupport
     LLVMMC
-
-    clangAST
-    clangAnalysis
-    clangBasic
-    clangDriver
-    clangFrontend
-    clangIndex
-    clangLex
-    clangParse
-    clangSema
-    clangSerialization
     )
 
 set(CPP2SIR_HEADERS
@@ -47,10 +46,18 @@ set(CPP2SIR_SOURCES
 add_subdirectory(json)
 
 add_executable(cpp2sir ${CPP2SIR_SOURCES} ${CPP2SIR_HEADERS})
+include_directories(${LLVM_INCLUDE_DIR})
+link_directories(${LLVM_LIB_DIR})
+
 if (MSVC)
     add_definitions("/wd4146 /wd4800 /wd4355 /wd4345 /wd4244 /wd4624 /wd4291")
 endif (MSVC)
+if (UNIX)
+    add_definitions("-fno-rtti")
+	target_link_libraries(cpp2sir pthread)
+endif (UNIX)
 target_link_libraries(cpp2sir libjson ${CLANG_LIBS})
+
 set_property(
     TARGET cpp2sir
     PROPERTY COMPILE_DEFINITIONS __STDC_LIMIT_MACROS __STDC_CONSTANT_MACROS _SCL_SECURE_NO_WARNINGS
