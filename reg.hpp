@@ -142,7 +142,7 @@ public:
 
 	context_type parent(context_type ctx) const
 	{
-		// FIXME: assert
+		BOOST_ASSERT(ctx > 0 && ctx < m_nodes.size());
 		return m_nodes[ctx].parent;
 	}
 
