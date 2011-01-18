@@ -4,6 +4,9 @@ project(cpp2sir)
 set(LLVM_INCLUDE_DIR "" CACHE PATH "The location of LLVM and clang include files.")
 set(LLVM_LIB_DIR "" CACHE PATH "The location of LLVM and clang library files.")
 
+include_directories(${LLVM_INCLUDE_DIR})
+link_directories(${LLVM_LIB_DIR})
+
 set(CLANG_LIBS
     clangFrontend
     clangDriver
@@ -46,8 +49,6 @@ set(CPP2SIR_SOURCES
 add_subdirectory(json)
 
 add_executable(cpp2sir ${CPP2SIR_SOURCES} ${CPP2SIR_HEADERS})
-include_directories(${LLVM_INCLUDE_DIR})
-link_directories(${LLVM_LIB_DIR})
 
 if (MSVC)
     add_definitions("/wd4146 /wd4800 /wd4355 /wd4345 /wd4244 /wd4624 /wd4291")
