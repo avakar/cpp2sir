@@ -6,6 +6,7 @@
 #include <boost/utility.hpp>
 #include <boost/ref.hpp>
 
+#include <clang/AST/CharUnits.h>
 #include <clang/AST/Stmt.h>
 #include <clang/AST/StmtCXX.h>
 #include <clang/AST/Expr.h>
@@ -221,16 +222,14 @@ struct context
 		if (op.type == eot_nodetgt)
 		{
 			cfg::vertex_descriptor res = head;
-			this->add_node(head, enode(cfg::nt_call)
-				(eot_oper, "*")
+			this->add_node(head, enode(cfg::nt_deref)
 				(eot_node, op.id));
 			return cfg::operand(cfg::ot_node, res);
 		}
 		else if (op.type == eot_vartgt)
 		{
 			cfg::vertex_descriptor res = head;
-			this->add_node(head, enode(cfg::nt_call)
-				(eot_oper, "*")
+			this->add_node(head, enode(cfg::nt_deref)
 				(eot_var, op.id));
 			return cfg::operand(cfg::ot_node, res);
 		}
@@ -243,8 +242,7 @@ struct context
 		if (type->isReferenceType() && !this->is_lvalue(op))
 		{
 			eop temp = this->make_temporary(type);
-			this->add_node(head, enode(cfg::nt_call)
-				(eot_oper, "=")
+			this->add_node(head, enode(cfg::nt_assign)
 				(this->make_address(temp))
 				(op));
 			return this->make_address(temp);
@@ -472,24 +470,58 @@ struct context
 
 		if (clang::BinaryOperator const * e = llvm::dyn_cast<clang::BinaryOperator>(expr))
 		{
+			// These should only appear as a part of CallExpr and should be handler right there.
+			BOOST_ASSERT(e->getOpcode() != clang::BO_PtrMemD && e->getOpcode() != clang::BO_PtrMemI);
+
 			eop const & lhs = this->build_expr(head, e->getLHS());
 
-			// Treat assignment specially (takes a pointer to the assignee).
-			if (e->isAssignmentOp() || e->isCompoundAssignmentOp())
+			if (e->getOpcode() == clang::BO_Assign)
 			{
+				// Treat assignment specially (takes a pointer to the assignee).
 				eop const & rhs = this->build_expr(head, e->getRHS());
-				this->add_node(head, enode(cfg::nt_call, expr)
-					(eot_oper, clang::BinaryOperator::getOpcodeStr(e->getOpcode()))
+				this->add_node(head, enode(cfg::nt_assign, expr)
 					(this->make_address(lhs))
 					(rhs));
 				return lhs;
 			}
+			else if (e->isCompoundAssignmentOp())
+			{
+				// Break compound assignments into separate instructions,
+				// i.e. model a += b as an add followed by assign.
+				eop const & rhs = this->build_expr(head, e->getRHS());
+
+				cfg::node_type type;
+				switch (e->getOpcode())
+				{
+				case clang::BO_MulAssign: type = cfg::nt_mul; break;
+				case clang::BO_DivAssign: type = cfg::nt_div; break;
+				case clang::BO_RemAssign: type = cfg::nt_rem; break;
+				case clang::BO_AddAssign: type = cfg::nt_add; break;
+				case clang::BO_SubAssign: type = cfg::nt_sub; break;
+				case clang::BO_ShlAssign: type = cfg::nt_shl; break;
+				case clang::BO_ShrAssign: type = cfg::nt_shr; break;
+				case clang::BO_AndAssign: type = cfg::nt_and; break;
+				case clang::BO_XorAssign: type = cfg::nt_xor; break;
+				case clang::BO_OrAssign:  type = cfg::nt_or; break;
+				default:
+					BOOST_ASSERT(0 && "unknown compound assignment encountered");
+				}
+
+				cfg::vertex_descriptor v = this->add_node(head, enode(type, expr)(lhs)(rhs));
+				this->add_node(head, enode(cfg::nt_assign, expr)(this->make_address(lhs))(eot_node, v));
+				return lhs;
+			}
 			else if (e->getOpcode() == clang::BO_Comma)
 			{
+				this->build_expr(head, e->getLHS());
 				return this->build_expr(head, e->getRHS());
 			}
 			else if (e->getOpcode() == clang::BO_LOr || e->getOpcode() == clang::BO_LAnd)
 			{
+				// These two operators are shot-circuiting, i.e. the right-hand side
+				// operand is not evaluated, unless the result of the operation is still unknown 
+				// even after the left-hand side evaluation is finished.
+
 				cfg::vertex_descriptor cond_node = this->make_node(head, lhs);
 				cfg::vertex_descriptor cont_head = this->duplicate_vertex(head);
 
@@ -508,10 +540,37 @@ struct context
 			else
 			{
 				eop const & rhs = this->build_expr(head, e->getRHS());
-				return eop(eot_node, this->add_node(head, enode(cfg::nt_call, expr)
-					(eot_oper, clang::BinaryOperator::getOpcodeStr(e->getOpcode()))
-					(lhs)
-					(rhs)));
+				bool negate = false;
+
+				cfg::node_type type;
+				switch (e->getOpcode())
+				{
+				case clang::BO_Mul: type = cfg::nt_mul; break;
+				case clang::BO_Div: type = cfg::nt_div; break;
+				case clang::BO_Rem: type = cfg::nt_rem; break;
+				case clang::BO_Add: type = cfg::nt_add; break;
+				case clang::BO_Sub: type = cfg::nt_sub; break;
+				case clang::BO_Shl: type = cfg::nt_shl; break;
+				case clang::BO_Shr: type = cfg::nt_shr; break;
+				case clang::BO_And: type = cfg::nt_and; break;
+				case clang::BO_Xor: type = cfg::nt_xor; break;
+				case clang::BO_Or:  type = cfg::nt_or; break;
+
+				case clang::BO_EQ: type = cfg::nt_eq; break;
+				case clang::BO_NE: type = cfg::nt_eq; negate = true; break;
+
+				case clang::BO_LT: type = cfg::nt_less; break;
+				case clang::BO_LE: type = cfg::nt_leq; break;
+				case clang::BO_GE: type = cfg::nt_less; negate = true; break;
+				case clang::BO_GT: type = cfg::nt_leq; negate = true; break;
+				default:
+					BOOST_ASSERT(0 && "unknown binary operator encountered");
+				}
+
+				cfg::vertex_descriptor v = this->add_node(head, enode(type, expr)(lhs)(rhs));
+				if (negate)
+					v = this->add_node(head, enode(cfg::nt_not, expr)(eot_node, v));
+				return eop(eot_node, v);
 			}
 		}
 		else if (clang::UnaryOperator const * e = llvm::dyn_cast<clang::UnaryOperator>(expr))
@@ -527,12 +586,11 @@ struct context
 			else if (e->getOpcode() == clang::UO_PreInc || e->getOpcode() == clang::UO_PreDec)
 			{
 				eop expr = this->build_expr(head, e->getSubExpr());
-				cfg::vertex_descriptor node = this->add_node(head, enode(cfg::nt_call, e)
-					(eot_oper, e->getOpcode() == clang::UO_PreInc? "+": "-")
+				cfg::vertex_descriptor node = this->add_node(head, enode(e)
+					(e->getOpcode() == clang::UO_PreInc? cfg::nt_add: cfg::nt_sub)
 					(expr)
 					(eot_const, sir_int_t(1)));
-				this->add_node(head, enode(cfg::nt_call, e)
-					(eot_oper, "=")
+				this->add_node(head, enode(cfg::nt_assign, e)
 					(this->make_address(expr))
 					(eot_node, node));
 				return expr;
@@ -540,24 +598,40 @@ struct context
 			else if (e->getOpcode() == clang::UO_PostInc || e->getOpcode() == clang::UO_PostDec)
 			{
 				eop expr = this->build_expr(head, e->getSubExpr());
-				cfg::vertex_descriptor node = this->add_node(head, enode(cfg::nt_call, e)
-					(eot_oper, e->getOpcode() == clang::UO_PostInc? "+": "-")
+				cfg::vertex_descriptor node = this->add_node(head, enode(e)
+					(e->getOpcode() == clang::UO_PostInc? cfg::nt_add: cfg::nt_sub)
 					(expr)
 					(eot_const, sir_int_t(1)));
-				this->add_node(head, enode(cfg::nt_call, e)
-					(eot_oper, "=")
+				this->add_node(head, enode(cfg::nt_assign, e)
 					(this->make_address(expr))
 					(eot_node, node));
 				return eop(eot_node, node);
 			}
 			else if (e->getOpcode() == clang::UO_Plus)
 			{
+				// Ignore the unary plus operator.
 				return this->build_expr(head, e->getSubExpr());
+			}
+			else if (e->getOpcode() == clang::UO_Not)
+			{
+				// Model negation as a xor between the value and the maximum value of the value's type.
+				uint64_t xor_val = (1 << m_fn->getASTContext().getTypeSize(e->getType())) - 1;
+				return eop(eot_node, this->add_node(head, enode(cfg::nt_xor, expr)
+					(this->build_expr(head, e->getSubExpr()))
+					(eot_const, sir_int_t(xor_val))));
 			}
 			else
 			{
-				return eop(eot_node, this->add_node(head, enode(cfg::nt_call, e)
-					(eot_oper, clang::UnaryOperator::getOpcodeStr(e->getOpcode()))
+				cfg::node_type type;
+				switch (e->getOpcode())
+				{
+				case clang::UO_Minus: type = cfg::nt_neg; break;
+				case clang::UO_LNot: type = cfg::nt_not; break;
+				default:
+					BOOST_ASSERT(0 && "unknown unary operator encountered");
+				}
+
+				return eop(eot_node, this->add_node(head, enode(type, e)
 					(this->build_expr(head, e->getSubExpr()))));
 			}
 		}
@@ -851,12 +925,12 @@ struct context
 		}
 		else if (clang::CXXNewExpr const * e = llvm::dyn_cast<clang::CXXNewExpr>(expr))
 		{
-			// TODO: relieve the interpreter of the privilege of having to recognize cxx:new[]
+			// TODO: Model the two operators directly.
 			if (e->isArray())
 			{
-				enode node(cfg::nt_call, e);
-				node(eot_oper, "cxx:new[]");
+				enode node(cfg::nt_cpp_new_array, e);
 				node(eot_func, this->get_name(e->getOperatorNew()));
+				node(eot_const, sir_int_t(m_fn->getASTContext().getTypeSizeInChars(e->getAllocatedType()).getQuantity()));
 				if (e->getConstructor())
 					node(eot_func, this->get_name(e->getConstructor()));
 				else
@@ -873,11 +947,9 @@ struct context
 			}
 			else
 			{
-				// TODO: exception safety
-
-				enode opnew_node(cfg::nt_call, e);
+				enode opnew_node(cfg::nt_cpp_new, e);
 				opnew_node(eot_func, this->get_name(e->getOperatorNew()));
-				opnew_node(eot_const, "sizeof:" + e->getAllocatedType().getAsString());
+				opnew_node(eot_const, sir_int_t(m_fn->getASTContext().getTypeSizeInChars(e->getAllocatedType()).getQuantity()));
 				this->append_args(
 					head,
 					opnew_node,
@@ -900,24 +972,17 @@ struct context
 		}
 		else if (clang::CXXDeleteExpr const * e = llvm::dyn_cast<clang::CXXDeleteExpr>(expr))
 		{
-			std::string name = e->isArrayForm()? "cxx:delete[]:": "cxx:delete:";
-
-			// TODO: Append a correct type of argument
-			//BOOST_ASSERT(llvm::isa<clang::PointerType>(e->getArgument()->getType()));
-			//name += e->getArgument()->getType().getAsString();//->getPointeeType()->getCanonicalTypeInternal().getAsString();
-
-			enode node(cfg::nt_call, e);
-			node(eot_oper, name);
-			node(this->build_expr(head, e->getArgument()));
-			node(eot_func, this->get_name(e->getOperatorDelete()));
-			return eop(eot_node, this->add_node(head, node));
+			// TODO: Model directly by calling the destructor followed by calling the operator delete function.
+			return eop(eot_node, this->add_node(head, enode(e)
+				(e->isArrayForm()? cfg::nt_cpp_delete_array: cfg::nt_cpp_delete)
+				(this->build_expr(head, e->getArgument()))
+				(eot_func, this->get_name(e->getOperatorDelete()))));
 		}
 		else if (clang::CXXThrowExpr const * e = llvm::dyn_cast<clang::CXXThrowExpr>(expr))
 		{
 			if (e->getSubExpr())
 			{
-				eop exc_mem = eop(eot_node, this->add_node(head, enode(cfg::nt_call)
-					(eot_oper, "cpp_exc_alloc")
+				eop exc_mem = eop(eot_node, this->add_node(head, enode(cfg::nt_cpp_exc_alloc)
 					(eot_varptr, m_name_mangler.make_rtti_name(e->getType().getUnqualifiedType(), m_static_prefix))));
 				
 				exc_object_regrec reg = { exc_mem };
@@ -926,8 +991,7 @@ struct context
 				this->init_object(head, exc_mem, e->getSubExpr()->getType(), e->getSubExpr(), false);
 
 				// Throw the exception object. The throwing will fail if there is an another uncaught exception.
-				this->add_node(head, enode(cfg::nt_call)
-					(eot_oper, "cpp_exc_throw")
+				this->add_node(head, enode(cfg::nt_cpp_exc_throw)
 					(exc_mem));
 
 				m_context_registry.remove(n);
@@ -936,13 +1000,11 @@ struct context
 			else
 			{
 				// Retrieve the current exception object.
-				cfg::vertex_descriptor exc_object = this->add_node(head, enode(cfg::nt_call)
-					(eot_oper, "cpp_exc_current"));
+				cfg::vertex_descriptor exc_object = this->add_node(head, enode(cfg::nt_cpp_exc_current));
 
 				// Rethrow it. The object must currently be unthrown.
 				// Note that making the exception object thrown will prevent it from being freed.
-				this->add_node(head, enode(cfg::nt_call)
-					(eot_oper, "cpp_exc_throw")
+				this->add_node(head, enode(cfg::nt_cpp_exc_throw)
 					(eot_node, exc_object));
 			}
 
@@ -962,8 +1024,7 @@ struct context
 		if (index.type == eot_const && get_const<sir_int_t>(index.id) == 0)
 			return this->make_deref(head, decayedptr);
 
-		return eop(eot_nodetgt, this->add_node(head, enode(cfg::nt_call, data)
-			(eot_oper, "+")
+		return eop(eot_nodetgt, this->add_node(head, enode(cfg::nt_add, data)
 			(decayedptr)
 			(index)));
 	}
@@ -984,16 +1045,14 @@ struct context
 
 		// The array must be an lvalue, otherwise we cannot get a pointer to the first element.
 		BOOST_ASSERT(this->is_lvalue(arr));
-		return eop(eot_node, this->add_node(head, enode(cfg::nt_call)
-			(eot_oper, "decay")
+		return eop(eot_node, this->add_node(head, enode(cfg::nt_decay)
 			(this->make_address(arr))));
 	}
 
 	void zero_initialize(cfg::vertex_descriptor & head, eop const & varptr, clang::QualType vartype, bool blockLifetime, clang::Stmt const * data)
 	{
 		BOOST_ASSERT(vartype->isScalarType());
-		this->add_node(head, enode(cfg::nt_call, data)
-			(eot_oper, "=")
+		this->add_node(head, enode(cfg::nt_assign, data)
 			(varptr)
 			(eot_const, sir_int_t(0)));
 	}
@@ -1074,8 +1133,7 @@ struct context
 		else if (vartype->isReferenceType())
 		{
 			// TODO: extend the lifetime of temporaries
-			this->add_node(head, enode(cfg::nt_call, e)
-				(eot_oper, "=")
+			this->add_node(head, enode(cfg::nt_assign, e)
 				(varptr)
 				(this->make_address(this->build_expr(head, e))));
 		}
@@ -1104,8 +1162,7 @@ struct context
 				for (; i != at->getSize() && init_idx < values.size(); ++i, ++init_idx)
 				{
 					eop elem = this->get_array_element(head, decayedptr, eop(eot_const, sir_int_t(i.getLimitedValue())), e);
-					this->add_node(head, enode(cfg::nt_call, e)
-						(eot_oper, "=")
+					this->add_node(head, enode(cfg::nt_assign, e)
 						(this->make_address(elem))
 						(eot_const, sir_int_t(values[init_idx])));
 				}
@@ -1128,12 +1185,10 @@ struct context
 			if (i != at->getSize())
 			{
 				eop loop_counter = this->make_temporary(m_fn->getASTContext().getSizeType()->getTypePtr());
-				this->add_node(head, enode(cfg::nt_call, e)
-					(eot_oper, "=")
+				this->add_node(head, enode(cfg::nt_assign, e)
 					(this->make_address(loop_counter))
 					(eot_const, sir_int_t(i.getLimitedValue())));
-				cfg::vertex_descriptor cond_node = this->add_node(head, enode(cfg::nt_call, e)
-					(eot_oper, "<")
+				cfg::vertex_descriptor cond_node = this->add_node(head, enode(cfg::nt_less, e)
 					(loop_counter)
 					(eot_const, sir_int_t(at->getSize().getLimitedValue())));
 
@@ -1143,12 +1198,10 @@ struct context
 				eop elem = this->get_array_element(head, decayedptr, loop_counter, e);
 				this->value_initialize(head, this->make_address(elem), at->getElementType(), blockLifetime, e);
 
-				cfg::vertex_descriptor incremented = this->add_node(head, enode(cfg::nt_call, e)
-					(eot_oper, "+")
+				cfg::vertex_descriptor incremented = this->add_node(head, enode(cfg::nt_add, e)
 					(loop_counter)
 					(eot_const, sir_int_t(1)));
-				this->add_node(head, enode(cfg::nt_call, e)
-					(eot_oper, "=")
+				this->add_node(head, enode(cfg::nt_assign, e)
 					(this->make_address(loop_counter))
 					(eot_node, incremented));
 
@@ -1169,8 +1222,7 @@ struct context
 			}
 			else
 			{
-				this->add_node(head, enode(cfg::nt_call, e)
-					(eot_oper, "=")
+				this->add_node(head, enode(cfg::nt_assign, e)
 					(varptr)
 					(this->build_expr(head, e)));
 			}
@@ -1280,7 +1332,7 @@ struct context
 		}
 		else if (clang::ForStmt const * s = llvm::dyn_cast<clang::ForStmt>(stmt))
 		{
-			// TODO: a virtual block scope should enclose the for loop
+			// FIXME: a virtual block scope should enclose the for loop
 			if (s->getInit())
 				this->build_stmt(head, s->getInit());
 
@@ -1390,8 +1442,7 @@ struct context
 			cfg::vertex_descriptor handler_head = add_vertex(g);
 			except_regrec reg = { handler_head };
 
-			eop exc_object = eop(eot_node, this->add_node(handler_head, enode(cfg::nt_call)
-				(eot_oper, "cpp_exc_current")));
+			eop exc_object = eop(eot_node, this->add_node(handler_head, enode(cfg::nt_cpp_exc_current)));
 
 			std::vector<cfg::vertex_descriptor> handled_heads;
 			for (unsigned i = 0; i != s->getNumHandlers(); ++i)
@@ -1401,8 +1452,7 @@ struct context
 				{
 					// Attempt to match the exception object to the handler.
 					// If the matching succeeds, the exception is marked as caught.
-					cfg::vertex_descriptor match_node = this->add_node(handler_head, enode(cfg::nt_call)
-						(eot_oper, "cpp_exc_catch")
+					cfg::vertex_descriptor match_node = this->add_node(handler_head, enode(cfg::nt_cpp_exc_catch)
 						(exc_object)
 						(eot_varptr, m_name_mangler.make_rtti_name(handler->getCaughtType(), m_static_prefix)));
 
@@ -1417,14 +1467,12 @@ struct context
 					{
 						if (var->getType()->isReferenceType())
 						{
-							this->add_node(handler_head, enode(cfg::nt_call)
-								(eot_oper, "=")
+							this->add_node(handler_head, enode(cfg::nt_assign)
 								(eot_varptr, this->get_name(var))
 								(eot_node, match_node));
 						}
 						else if  (var->getType()->isScalarType() || var->getType()->isPointerType())
-							this->add_node(handler_head, enode(cfg::nt_call)
-								(eot_oper, "=")
+							this->add_node(handler_head, enode(cfg::nt_assign)
 								(eot_varptr, this->get_name(var))
 								(eot_nodetgt, match_node));
 						else
@@ -1461,8 +1509,7 @@ struct context
 
 			// Release the exception object. Note that uncaught object will not be released
 			// so that rethrow is possible.
-			cfg::vertex_descriptor v = this->add_node(handled_heads[0], enode(cfg::nt_call)
-				(eot_oper, "cpp_exc_free")
+			cfg::vertex_descriptor v = this->add_node(handled_heads[0], enode(cfg::nt_cpp_exc_free)
 				(exc_object));
 
 			context_node n = m_context_registry.add(reg);
@@ -1536,8 +1583,7 @@ struct context
 
 		jump_sentinel operator()(exc_object_regrec const & reg)
 		{
-			ctx.add_node(s.sentinel, enode(cfg::nt_call)
-				(eot_oper, "cpp_exc_free")
+			ctx.add_node(s.sentinel, enode(cfg::nt_cpp_exc_free)
 				(reg.exc_obj_ptr));
 			return s;
 		}
@@ -1577,8 +1623,7 @@ struct context
 
 		jump_sentinel operator()(exc_object_regrec const & reg)
 		{
-			ctx.add_node(s.sentinel, enode(cfg::nt_call)
-				(eot_oper, "cpp_exc_free")
+			ctx.add_node(s.sentinel, enode(cfg::nt_cpp_exc_free)
 				(reg.exc_obj_ptr));
 			return s;
 		}

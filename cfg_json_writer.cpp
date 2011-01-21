@@ -46,6 +46,13 @@ struct convert_constant
 	}
 };
 
+static char const * const opcode_name_table[] = {
+	"none", "exit", "value", "call", "phi", "deref", "assign", "decay", "add", "sub", "mul", "div",
+	"rem", "shl", "shr", "and", "xor", "or", "eq", "leq", "less", "neg", "not",
+	"cpp_exc_alloc", "cpp_exc_throw", "cpp_exc_catch", "cpp_exc_current", "cpp_exc_free",
+	"cpp_new", "cpp_new_array", "cpp_delete", "cpp_delete_array"
+};
+
 class context
 {
 public:
@@ -82,29 +89,11 @@ private:
 
 				Json::Value json_node(Json::arrayValue);
 				json_node.resize(3);
-				switch (node.type)
-				{
-				case cfg::nt_none:
-					json_node[0u] = "none";
-					break;
-				case cfg::nt_exit:
-					json_node[0u] = "exit";
-					break;
-				case cfg::nt_value:
-					json_node[0u] = "value";
-					break;
-				case cfg::nt_call:
-					json_node[0u] = "call";
-					break;
-				case cfg::nt_phi:
-					json_node[0u] = "phi";
-					break;
-				default:
-					BOOST_ASSERT(0 && "Unknown node type");
-				}
+
+				BOOST_ASSERT(node.type < sizeof opcode_name_table / sizeof opcode_name_table[0]);
+				json_node[0u] = opcode_name_table[node.type];
 
 				json_node[1] = Json::Value(Json::arrayValue);
-
 				std::pair<cfg::out_edge_iterator, cfg::out_edge_iterator> out_edges_range = out_edges(*it, c);
 				for (cfg::out_edge_iterator edge_it = out_edges_range.first; edge_it != out_edges_range.second; ++edge_it)
 				{
@@ -128,9 +117,6 @@ private:
 						break;
 					case cfg::ot_func:
 						json_op.append("func");
-						break;
-					case cfg::ot_oper:
-						json_op.append("oper");
 						break;
 					case cfg::ot_const:
 						json_op.append("const");

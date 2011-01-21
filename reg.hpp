@@ -16,7 +16,7 @@
 #include <cstdlib>
 
 // TODO: put these to a more reasonable header
-enum eop_type { eot_none, eot_func, eot_oper, eot_const, eot_member, eot_node, eot_var, eot_varptr, eot_nodetgt, eot_vartgt };
+enum eop_type { eot_none, eot_func, eot_const, eot_member, eot_node, eot_var, eot_varptr, eot_nodetgt, eot_vartgt };
 
 struct eop
 {
@@ -40,9 +40,20 @@ struct enode
 	std::vector<eop> ops;
 	clang::Stmt const * data;
 
+	enode(clang::Stmt const * data = 0)
+		: type(cfg::nt_none), data(data)
+	{
+	}
+
 	enode(cfg::node_type type, clang::Stmt const * data = 0)
 		: type(type), data(data)
 	{
+	}
+
+	enode & operator()(cfg::node_type const & type)
+	{
+		this->type = type;
+		return *this;
 	}
 
 	enode & operator()(eop const & op)

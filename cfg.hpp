@@ -154,8 +154,15 @@ public:
 
 	typedef graph_vertex * vertex_descriptor;
 
-	enum node_type { nt_none, nt_exit, nt_value, nt_call, nt_phi };
-	enum op_type { ot_none, ot_func, ot_oper, ot_const, ot_member, ot_node, ot_var, ot_varptr };
+	enum node_type { nt_none, nt_exit, nt_value, nt_call, nt_phi,
+		nt_deref, nt_assign, nt_decay,
+		nt_add, nt_sub, nt_mul, nt_div, nt_rem, nt_shl, nt_shr, nt_and, nt_xor, nt_or,
+		nt_eq, nt_leq, nt_less, 
+		nt_neg, nt_not,
+		nt_cpp_exc_alloc, nt_cpp_exc_throw, nt_cpp_exc_catch, nt_cpp_exc_current, nt_cpp_exc_free,
+		nt_cpp_new, nt_cpp_new_array, nt_cpp_delete, nt_cpp_delete_array,
+	};
+	enum op_type { ot_none, ot_func, ot_const, ot_member, ot_node, ot_var, ot_varptr };
 
 	typedef boost::variant<boost::none_t, constant, vertex_descriptor> op_id;
 
