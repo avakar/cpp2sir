@@ -951,7 +951,6 @@ struct context
 			}
 			else
 			{
-				// FIXME: proper exception handling
 				enode opnew_node(cfg::nt_call, e);
 				opnew_node(eot_func, this->get_name(e->getOperatorNew()));
 				opnew_node(eot_const, sir_int_t(m_fn->getASTContext().getTypeSizeInChars(e->getAllocatedType()).getQuantity()));
@@ -961,7 +960,10 @@ struct context
 					e->getOperatorNew()->param_begin() + 1, e->getOperatorNew()->param_end(),
 					e->placement_arg_begin(), e->placement_arg_end());
 
-				eop ptr_op = eop(eot_node, this->add_node(head, opnew_node));
+				cfg::vertex_descriptor v = this->add_node(head, opnew_node);
+				this->connect_to_exc(v);
+				eop ptr_op = eop(eot_node, v);
+
 				if (e->getConstructor() != 0)
 				{
 					enode construct_node(cfg::nt_call, e);
@@ -970,6 +972,24 @@ struct context
 					this->append_args(head, construct_node, e->getConstructor()->param_begin(), e->getConstructor()->param_end(),
 						e->constructor_arg_begin(), e->constructor_arg_end());
 					this->add_node(head, construct_node);
+
+					cfg::vertex_descriptor exc_head = this->duplicate_vertex(head);
+					this->set_cond(exc_head, 1, boost::none);
+
+					this->add_node(exc_head, enode(cfg::nt_call, e)
+						(eot_func, this->get_name(e->getOperatorDelete()))
+						(ptr_op)
+						);
+
+					m_exc_registry[m_context_registry.current_context()].push_back(exc_head);
+				}
+				else if (e->raw_arg_begin() != e->raw_arg_end())
+				{
+					// Non-class type, but with an initializer
+					BOOST_ASSERT(e->raw_arg_end() - e->raw_arg_begin() == 1);
+					this->add_node(head, enode(cfg::nt_assign, e)
+						(ptr_op)
+						(this->build_expr(head, *e->raw_arg_begin())));
 				}
 
 				return ptr_op;
@@ -1020,6 +1040,11 @@ struct context
 			m_exc_registry[m_context_registry.current_context()].push_back(head);
 			head = add_vertex(g);
 			return eop();
+		}
+		else if (clang::ImplicitValueInitExpr const * e = llvm::dyn_cast<clang::ImplicitValueInitExpr>(expr))
+		{
+			// TODO: Is this correct? In what contexts can this occur, other that "new int()"?
+			return eop(eot_const, sir_int_t(0));
 		}
 		else
 		{
