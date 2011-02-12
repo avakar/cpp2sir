@@ -931,7 +931,8 @@ struct context
 			// TODO: Model the two operators directly.
 			if (e->isArray())
 			{
-				enode node(cfg::nt_cpp_new_array, e);
+				enode node(cfg::nt_call, e);
+				node(eot_func, "__sir_cpp_new_array");
 				node(eot_func, this->get_name(e->getOperatorNew()));
 				node(eot_const, sir_int_t(m_fn->getASTContext().getTypeSizeInChars(e->getAllocatedType()).getQuantity()));
 				if (e->getConstructor())
@@ -950,7 +951,8 @@ struct context
 			}
 			else
 			{
-				enode opnew_node(cfg::nt_cpp_new, e);
+				// FIXME: proper exception handling
+				enode opnew_node(cfg::nt_call, e);
 				opnew_node(eot_func, this->get_name(e->getOperatorNew()));
 				opnew_node(eot_const, sir_int_t(m_fn->getASTContext().getTypeSizeInChars(e->getAllocatedType()).getQuantity()));
 				this->append_args(
@@ -976,8 +978,8 @@ struct context
 		else if (clang::CXXDeleteExpr const * e = llvm::dyn_cast<clang::CXXDeleteExpr>(expr))
 		{
 			// TODO: Model directly by calling the destructor followed by calling the operator delete function.
-			return eop(eot_node, this->add_node(head, enode(e)
-				(e->isArrayForm()? cfg::nt_cpp_delete_array: cfg::nt_cpp_delete)
+			return eop(eot_node, this->add_node(head, enode(cfg::nt_call, e)
+				(eot_func, e->isArrayForm()? "__sir_cpp_delete_array": "__sir_cpp_delete")
 				(this->build_expr(head, e->getArgument()))
 				(eot_func, this->get_name(e->getOperatorDelete()))));
 		}
@@ -985,7 +987,8 @@ struct context
 		{
 			if (e->getSubExpr())
 			{
-				eop exc_mem = eop(eot_node, this->add_node(head, enode(cfg::nt_cpp_exc_alloc)
+				eop exc_mem = eop(eot_node, this->add_node(head, enode(cfg::nt_call)
+					(eot_func, "__sir_cpp_exc_alloc")
 					(eot_varptr, m_name_mangler.make_rtti_name(e->getType().getUnqualifiedType(), m_static_prefix))));
 				
 				exc_object_regrec reg = { exc_mem };
@@ -994,7 +997,8 @@ struct context
 				this->init_object(head, exc_mem, e->getSubExpr()->getType(), e->getSubExpr(), false);
 
 				// Throw the exception object. The throwing will fail if there is an another uncaught exception.
-				this->add_node(head, enode(cfg::nt_cpp_exc_throw)
+				this->add_node(head, enode(cfg::nt_call, e)
+					(eot_func, "__sir_cpp_exc_throw")
 					(exc_mem));
 
 				m_context_registry.remove(n);
@@ -1003,11 +1007,13 @@ struct context
 			else
 			{
 				// Retrieve the current exception object.
-				cfg::vertex_descriptor exc_object = this->add_node(head, enode(cfg::nt_cpp_exc_current));
+				cfg::vertex_descriptor exc_object = this->add_node(head, enode(cfg::nt_call)
+					(eot_func, "__sir_cpp_exc_current"));
 
 				// Rethrow it. The object must currently be unthrown.
 				// Note that making the exception object thrown will prevent it from being freed.
-				this->add_node(head, enode(cfg::nt_cpp_exc_throw)
+				this->add_node(head, enode(cfg::nt_call, e)
+					(eot_func, "__sir_cpp_exc_throw")
 					(eot_node, exc_object));
 			}
 
@@ -1448,7 +1454,8 @@ struct context
 			cfg::vertex_descriptor handler_head = add_vertex(g);
 			except_regrec reg = { handler_head };
 
-			eop exc_object = eop(eot_node, this->add_node(handler_head, enode(cfg::nt_cpp_exc_current)));
+			eop exc_object = eop(eot_node, this->add_node(handler_head, enode(cfg::nt_call)
+				(eot_func, "__sir_cpp_exc_current")));
 
 			std::vector<cfg::vertex_descriptor> handled_heads;
 			for (unsigned i = 0; i != s->getNumHandlers(); ++i)
@@ -1458,7 +1465,8 @@ struct context
 				{
 					// Attempt to match the exception object to the handler.
 					// If the matching succeeds, the exception is marked as caught.
-					cfg::vertex_descriptor match_node = this->add_node(handler_head, enode(cfg::nt_cpp_exc_catch)
+					cfg::vertex_descriptor match_node = this->add_node(handler_head, enode(cfg::nt_call)
+						(eot_func, "__sir_cpp_exc_catch")
 						(exc_object)
 						(eot_varptr, m_name_mangler.make_rtti_name(handler->getCaughtType(), m_static_prefix)));
 
@@ -1515,7 +1523,8 @@ struct context
 
 			// Release the exception object. Note that uncaught object will not be released
 			// so that rethrow is possible.
-			cfg::vertex_descriptor v = this->add_node(handled_heads[0], enode(cfg::nt_cpp_exc_free)
+			cfg::vertex_descriptor v = this->add_node(handled_heads[0], enode(cfg::nt_call)
+				(eot_func, "__sir_cpp_exc_free")
 				(exc_object));
 
 			context_node n = m_context_registry.add(reg);
@@ -1589,7 +1598,8 @@ struct context
 
 		jump_sentinel operator()(exc_object_regrec const & reg)
 		{
-			ctx.add_node(s.sentinel, enode(cfg::nt_cpp_exc_free)
+			ctx.add_node(s.sentinel, enode(cfg::nt_call)
+				(eot_func, "__sir_cpp_exc_free")
 				(reg.exc_obj_ptr));
 			return s;
 		}
@@ -1629,7 +1639,8 @@ struct context
 
 		jump_sentinel operator()(exc_object_regrec const & reg)
 		{
-			ctx.add_node(s.sentinel, enode(cfg::nt_cpp_exc_free)
+			ctx.add_node(s.sentinel, enode(cfg::nt_call)
+				(eot_func, "__sir_cpp_exc_free")
 				(reg.exc_obj_ptr));
 			return s;
 		}
