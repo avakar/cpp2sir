@@ -470,6 +470,8 @@ struct context
 
 		if (clang::BinaryOperator const * e = llvm::dyn_cast<clang::BinaryOperator>(expr))
 		{
+			// FIXME: pointer arithmetics should produce adjust/dist operands.
+
 			// These should only appear as a part of CallExpr and should be handler right there.
 			BOOST_ASSERT(e->getOpcode() != clang::BO_PtrMemD && e->getOpcode() != clang::BO_PtrMemI);
 
@@ -874,9 +876,10 @@ struct context
 			eop base = this->build_expr(head, e->getBase());
 			if (!e->isArrow())
 				base = this->make_address(base);
-			return eop(eot_nodetgt, this->add_node(head, enode(cfg::nt_call, e)
-				(eot_member, this->get_name(e->getMemberDecl()))
-				(base)));
+			return eop(eot_nodetgt, this->add_node(head, enode(cfg::nt_member, e)
+				(base)
+				(eot_const, this->get_name(e->getMemberDecl()))
+				));
 		}
 		else if (clang::ArraySubscriptExpr const * e = llvm::dyn_cast<clang::ArraySubscriptExpr>(expr))
 		{
@@ -1024,7 +1027,7 @@ struct context
 		if (index.type == eot_const && get_const<sir_int_t>(index.id) == 0)
 			return this->make_deref(head, decayedptr);
 
-		return eop(eot_nodetgt, this->add_node(head, enode(cfg::nt_add, data)
+		return eop(eot_nodetgt, this->add_node(head, enode(cfg::nt_adjust, data)
 			(decayedptr)
 			(index)));
 	}
@@ -1045,8 +1048,10 @@ struct context
 
 		// The array must be an lvalue, otherwise we cannot get a pointer to the first element.
 		BOOST_ASSERT(this->is_lvalue(arr));
-		return eop(eot_node, this->add_node(head, enode(cfg::nt_decay)
-			(this->make_address(arr))));
+		return eop(eot_node, this->add_node(head, enode(cfg::nt_member)
+			(this->make_address(arr))
+			(eot_const, sir_int_t(0))
+			));
 	}
 
 	void zero_initialize(cfg::vertex_descriptor & head, eop const & varptr, clang::QualType vartype, bool blockLifetime, clang::Stmt const * data)
@@ -1114,9 +1119,10 @@ struct context
 				{
 					clang::FieldDecl const * field = *it;
 
-					eop fieldptrop = eop(eot_node, this->add_node(head, enode(cfg::nt_call)
-						(eot_member, this->get_name(field))
-						(varptr)));
+					eop fieldptrop = eop(eot_node, this->add_node(head, enode(cfg::nt_member)
+						(varptr)
+						(eot_const, this->get_name(field))
+						));
 
 					// TODO: exceptions?
 					if (init_idx < ie->getNumInits())
@@ -1828,9 +1834,10 @@ struct context
 			if (init->isMemberInitializer())
 			{
 				BOOST_ASSERT(!init->isBaseInitializer());
-				cfg::vertex_descriptor memberop = this->add_node(m_head, enode(cfg::nt_call)
-					(eot_member, this->get_name(init->getMember()))
-					(eot_var, "p:this"));
+				cfg::vertex_descriptor memberop = this->add_node(m_head, enode(cfg::nt_member)
+					(eot_var, "p:this")
+					(eot_const, this->get_name(init->getMember()))
+					);
 
 				this->begin_lifetime_context(m_fullexpr_lifetimes);
 				this->init_object(m_head, eop(eot_node, memberop), init->getMember()->getType(), init->getInit(), false);
@@ -1874,9 +1881,10 @@ struct context
 				{
 					this->register_decl_ref(rd->getDestructor());
 
-					cfg::vertex_descriptor member = this->add_node(m_head, enode(cfg::nt_call)
-						(eot_member, this->get_name(fd))
-						(eot_var, "p:this"));
+					cfg::vertex_descriptor member = this->add_node(m_head, enode(cfg::nt_member)
+						(eot_var, "p:this")
+						(eot_const, this->get_name(fd))
+						);
 
 					this->add_node(m_head, enode(cfg::nt_call)
 						(eot_func, this->get_name(rd->getDestructor()))

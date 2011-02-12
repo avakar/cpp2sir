@@ -47,7 +47,7 @@ struct convert_constant
 };
 
 static char const * const opcode_name_table[] = {
-	"none", "exit", "value", "call", "phi", "deref", "assign", "decay", "add", "sub", "mul", "div",
+	"none", "exit", "value", "call", "phi", "adjust", "dist", "deref", "assign", "member", "add", "sub", "mul", "div",
 	"rem", "shl", "shr", "and", "xor", "or", "eq", "leq", "less", "neg", "not",
 	"cpp_exc_alloc", "cpp_exc_throw", "cpp_exc_catch", "cpp_exc_current", "cpp_exc_free",
 	"cpp_new", "cpp_new_array", "cpp_delete", "cpp_delete_array"
@@ -120,9 +120,6 @@ private:
 						break;
 					case cfg::ot_const:
 						json_op.append("const");
-						break;
-					case cfg::ot_member:
-						json_op.append("member");
 						break;
 					case cfg::ot_node:
 						json_op.append("node");

@@ -16,7 +16,7 @@
 #include <cstdlib>
 
 // TODO: put these to a more reasonable header
-enum eop_type { eot_none, eot_func, eot_const, eot_member, eot_node, eot_var, eot_varptr, eot_nodetgt, eot_vartgt };
+enum eop_type { eot_none, eot_func, eot_const, eot_node, eot_var, eot_varptr, eot_nodetgt, eot_vartgt };
 
 struct eop
 {

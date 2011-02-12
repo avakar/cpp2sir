@@ -205,7 +205,8 @@ class ErrorReporter:
         self.tname = tname
 
     def write_source(self, str):
-        self.fout.write('%s: %s\n' % (self.fname, str))
+        #self.fout.write('%s: %s\n' % (self.fname, str))
+        pass
 
     def write_templ(self, str):
         self.fout.write('%s: %s\n' % (self.tname, str))
