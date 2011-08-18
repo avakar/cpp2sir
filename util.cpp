@@ -28,35 +28,36 @@ clang::LinkageSpecDecl::LanguageIDs get_linkage_specifier(clang::NamedDecl const
 
 std::string name_mangler::make_decl_name(clang::NamedDecl const * decl, std::string const & static_prefix)
 {
-	std::string name;
-
+	std::string name_str;
+	llvm::raw_string_ostream name(name_str);
 	if (decl->getLinkage() == clang::UniqueExternalLinkage || decl->getLinkage() == clang::InternalLinkage)
 	{
-		name = "_S";
-		name.append(boost::lexical_cast<std::string>(static_prefix.size()));
-		name.append(static_prefix);
+		name << "_S" << static_prefix.size() << static_prefix;
 	}
 
 	if (get_linkage_specifier(decl) == clang::LinkageSpecDecl::lang_c || (!llvm::isa<clang::VarDecl>(decl) && !llvm::isa<clang::FunctionDecl>(decl)))
-		return name + decl->getNameAsString();
-
-	llvm::SmallVector<char, 64> res;
-	if (clang::CXXConstructorDecl const * ctor = llvm::dyn_cast<clang::CXXConstructorDecl>(decl))
-		m_mangler->mangleCXXCtor(ctor, clang::Ctor_Complete, res);
-	else if (clang::CXXDestructorDecl const * dtor = llvm::dyn_cast<clang::CXXDestructorDecl>(decl))
-		m_mangler->mangleCXXDtor(dtor, clang::Dtor_Complete, res);
+	{
+		name << decl->getName();
+	}
 	else
-		m_mangler->mangleName(decl, res);
+	{
+		if (clang::CXXConstructorDecl const * ctor = llvm::dyn_cast<clang::CXXConstructorDecl>(decl))
+			m_mangler->mangleCXXCtor(ctor, clang::Ctor_Complete, name);
+		else if (clang::CXXDestructorDecl const * dtor = llvm::dyn_cast<clang::CXXDestructorDecl>(decl))
+			m_mangler->mangleCXXDtor(dtor, clang::Dtor_Complete, name);
+		else
+			m_mangler->mangleName(decl, name);
+	}
 
-	name.append(res.begin(), res.end());
-	m_aliases.insert(std::make_pair(name, decl->getQualifiedNameAsString()));
-	return name;
+	m_aliases.insert(std::make_pair(name_str, decl->getQualifiedNameAsString()));
+	return name_str;
 }
 
 std::string name_mangler::make_rtti_name(clang::QualType type, std::string const & static_prefix)
 {
-	llvm::SmallVector<char, 64> res;
+	std::string res_str;
+	llvm::raw_string_ostream res(res_str);
 	m_mangler->mangleCXXRTTI(type, res);
 
-	return std::string(res.begin(), res.end());
+	return res_str;
 }

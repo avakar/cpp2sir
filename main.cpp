@@ -191,6 +191,7 @@ int main(int argc, char * argv[])
 			"-ferror-limit", "19",
 			"-fmessage-length", "300",
 			"-fexceptions",
+			"-fcxx-exceptions",
 			"-fms-extensions",
 			"-fgnu-runtime",
 			"-fdiagnostics-show-option",

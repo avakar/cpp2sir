@@ -8,8 +8,8 @@ I recommend always using the trunk version of both LLVM and clang
 I will also keep this file updated with the revisions of LLVM and clang
 that are known to work.
 
-    $ svn co -r 123537 http://llvm.org/svn/llvm-project/llvm/trunk llvm
-    $ svn co -r 123539 http://llvm.org/svn/llvm-project/cfe/trunk llvm/tools/clang
+    $ svn co http://llvm.org/svn/llvm-project/llvm/tags/RELEASE_29/final llvm
+    $ svn co http://llvm.org/svn/llvm-project/cfe/tags/RELEASE_29/final llvm/tools/clang
 
 Use `cmake` to generate whatever makefiles you use on your platform.
 I recommend performing the build in a nested directory so as to keep the source
